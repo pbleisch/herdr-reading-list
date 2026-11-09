@@ -1,6 +1,8 @@
 // Item files: parsing what the folder holds, what type an item is, and how Enter opens it.
 // Pure functions, shared by the mod and the node tests. See docs/design.md 3.2 and 4.5.
 
+import { LINUX_RUNS } from "./platform.js";
+
 const ID = /^[0-9a-f]{16}$/;
 const KINDS = new Set(["review", "fyi", "result"]);
 
@@ -131,12 +133,14 @@ const RUNS = new Set([
 
 // How Enter opens an item: { how: "url" | "open" | "reveal" | "missing", target }.
 // Executable files, folders with an extension (bundles such as .app) and the types in
-// RUNS are revealed in Finder instead of opened, so the list never launches anything.
-export function openAction(item, fsKind) {
+// RUNS (on Linux also LINUX_RUNS) are revealed in the file manager instead of opened, so
+// the list never launches anything.
+export function openAction(item, fsKind, platform = "macos") {
   if (item.url) return { how: "url", target: item.url };
   if (fsKind === "-" || !fsKind) return { how: "missing", target: item.path };
   if (fsKind === "x") return { how: "reveal", target: item.path };
   const e = ext(item.path);
   if (fsKind === "d") return { how: e ? "reveal" : "open", target: item.path };
-  return { how: RUNS.has(e) ? "reveal" : "open", target: item.path };
+  const runs = RUNS.has(e) || (platform === "linux" && LINUX_RUNS.has(e));
+  return { how: runs ? "reveal" : "open", target: item.path };
 }

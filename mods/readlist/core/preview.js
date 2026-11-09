@@ -3,6 +3,7 @@
 // node tests. See docs/design.md 4.2 and 4.5.
 
 import { typeOf } from "./items.js";
+import { thumbnails } from "./platform.js";
 
 // Under this width (logical px) the pane is narrow: the preview is hidden until `p`, and
 // shown below the list. At or above it, the list is on the left and the preview on the right.
@@ -31,8 +32,9 @@ export function previewShown(width, choice) {
 }
 
 // What the preview draws for an item, given its STAT line (`kind mtime size`, or `-`):
-// { how: "url" | "missing" | "markdown" | "text" | "image" | "thumb" | "folder", lang?, ext? }.
-export function previewKind(item, fsKind) {
+// { how: "url" | "missing" | "markdown" | "text" | "image" | "thumb" | "icon" | "folder",
+// lang?, ext? }. "icon" (the type's icon, no thumbnail) is for platforms without Quick Look.
+export function previewKind(item, fsKind, platform = "macos") {
   if (item.url) return { how: "url" };
   if (!fsKind || fsKind === "-") return { how: "missing" };
   if (fsKind === "d") return { how: "folder" };
@@ -41,8 +43,11 @@ export function previewKind(item, fsKind) {
   if (type === "md") return { how: "markdown" };
   if (type === "code" || type === "text") return { how: "text", lang: LANG[e] ?? (e || "text") };
   if (type === "image" && DRAWN.has(e)) return { how: "image", ext: e };
-  return { how: "thumb" };
+  return noThumb(platform);
 }
+
+// A file with no drawn preview: a Quick Look thumbnail, or where there is none its icon.
+export const noThumb = (platform = "macos") => (thumbnails(platform) ? { how: "thumb" } : { how: "icon" });
 
 // Thumbnail width in pixels for a preview this many logical pixels wide: two pixels per
 // point for Retina, in two steps so a resize does not remake every thumbnail.

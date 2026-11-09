@@ -10,7 +10,7 @@ import { NO_FILTER, applyFilters, filterRows, isFiltered, textMatches, options, 
 import { arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction, CLAIM_MS, CLAIM_MAX, QUIET_MS } from "../mods/readlist/core/arrival.js";
 import { INBOX_SCRIPT, ADD_SCRIPT, parseInbox, inboxPlan, SETTLE_S } from "../mods/readlist/core/inbox.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "../mods/readlist/core/viewer.js";
-import { mergeKeys } from "../bin/merge-keys.mjs";
+import { mergeKeys, forPlatform } from "../bin/merge-keys.mjs";
 
 const repo = new URL("..", import.meta.url).pathname;
 let n = 0;
@@ -331,6 +331,21 @@ test("mergeKeys adds free keys and never replaces a key in use", () => {
   assert.deepEqual(mergeKeys({}, mine).merged, mine);
 });
 
-test("the repo's keys.json binds cmd-shift-i to the popup", () => {
-  assert.deepEqual(JSON.parse(readFileSync(join(repo, "keys.json"), "utf8")), { global: { "cmd-shift-i": "mod.open:readlist" } });
+test("forPlatform keeps macOS's cmd key and Linux's and Windows's ctrl key of a pair", () => {
+  const keys = { global: { "cmd-shift-i": "mod.open:readlist", "ctrl-shift-i": "mod.open:readlist", "alt-r": "x" }, "mod:readlist": { "ctrl-s": "readlist.save", "cmd-k": "readlist.find" } };
+  assert.deepEqual(forPlatform(keys, "darwin"), { global: { "cmd-shift-i": "mod.open:readlist", "alt-r": "x" }, "mod:readlist": { "ctrl-s": "readlist.save", "cmd-k": "readlist.find" } });
+  for (const p of ["linux", "win32"]) {
+    assert.deepEqual(forPlatform(keys, p), { global: { "ctrl-shift-i": "mod.open:readlist", "alt-r": "x" }, "mod:readlist": { "ctrl-s": "readlist.save", "cmd-k": "readlist.find" } }, p);
+  }
+  // A cmd and a ctrl key bound to different actions are not a pair: both stay.
+  const two = { global: { "cmd-j": "a", "ctrl-j": "b" } };
+  assert.deepEqual(forPlatform(two, "linux"), two);
+  assert.deepEqual(forPlatform(undefined, "linux"), {});
+});
+
+test("the repo's keys.json binds cmd-shift-i on macOS and ctrl-shift-i on Linux and Windows to the popup", () => {
+  const keys = JSON.parse(readFileSync(join(repo, "keys.json"), "utf8"));
+  assert.deepEqual(keys, { global: { "cmd-shift-i": "mod.open:readlist", "ctrl-shift-i": "mod.open:readlist" } });
+  assert.deepEqual(forPlatform(keys, "darwin"), { global: { "cmd-shift-i": "mod.open:readlist" } });
+  assert.deepEqual(forPlatform(keys, "linux"), { global: { "ctrl-shift-i": "mod.open:readlist" } });
 });

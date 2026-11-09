@@ -3,15 +3,22 @@
 A list of files and links that agents and tools put up for the person to read. An agent runs
 `rl add plan.md --note "why"`; the item appears at the top of the list with a toast, showing what
 it is, the note and who added it. The person walks the list with the keyboard, sees a preview of
-the selected item beside the list (rendered markdown, highlighted code, images, Quick Look
-thumbnails of HTML and PDF), opens it in its macOS app with Enter, and marks it done. Agents on
+the selected item beside the list (rendered markdown, highlighted code, images, and on macOS Quick
+Look thumbnails of HTML and PDF), opens it in its default app with Enter, and marks it done. Agents on
 other machines Herdr reaches add to that machine's own list, which shows here too: their files
 are previewed in place or fetched into a local copy to open. When the person turns it on, files
 Claude Code agents send them with their SendUserFile tool arrive on the list too, without the agent
-running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shift-i`. macOS only.
+running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shift-i`
+(`ctrl-shift-i` on Linux).
 `skill/reading-list/SKILL.md` is an agent skill that teaches agents when and how to add.
 
 ![Reading list](preview.png)
+
+| Platform | Support |
+|---|---|
+| macOS | Full: `open`, Finder (`open -R`), the Quick Look panel and thumbnails (`qlmanage`). |
+| Linux | Supported: `xdg-open`, the file manager through the freedesktop `FileManager1` D-Bus call (`gdbus`), else `xdg-open` on the folder; the Space preview window needs GNOME Sushi, else the in-pane preview; no thumbnails (other types show their icon). |
+| Windows | Coming. |
 
 ## What you see
 
@@ -44,10 +51,12 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - **Preview**: in a pane 520 or wider it fills the right of the list (the list takes 42% of the
   width, 300 to 460), separated by a 1px `border`, on `background`. A header (14 side padding, 1px `border` under it) with the title (medium), the
   path or URL (11 `dim`; `devbox:/path` for another machine's, with "on devbox" or "copy from devbox,
-  fetched 18:42; edits to the copy stay on this Mac" under it) and the note (11.5 `muted`), then
+  fetched 18:42; edits to the copy stay on this Mac" (Linux: "this computer") under it) and the note (11.5 `muted`), then
   the body: markdown rendered (`TextView.markdown`),
   text and code in a read-only editor with highlighting, images, a Quick Look thumbnail for HTML,
-  PDF and anything else Quick Look draws, a folder's entries, a link's URL, "gone" for a missing
+  PDF and anything else Quick Look draws (on Linux, where there are no thumbnails: the type's icon,
+  48 `muted`, centered, over "No thumbnail for this type here. Enter opens it; Space shows it in
+  GNOME Sushi." in 12 `dim`), a folder's entries, a link's URL, "gone" for a missing
   file. Narrower, the preview is hidden until `p`, then shows below the list (half the pane, at
   most 260).
 - **Key hints** (24 high, 10.5 `dim`) at the bottom while the list has the keyboard: "↵ open  ␣ look
@@ -68,9 +77,12 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   the popup.
 - **Keys** (while the list has the keyboard; a click on it gives it the keyboard): click or
   `j`/`k`/arrows/`g`/`G`/Home/End select (selecting never opens); Enter or a double-click opens in
-  the default app and marks read (the popup then closes); Space toggles the macOS Quick Look panel
-  (doesn't mark read); `p` preview in the pane; `v` opens a preview-only pane on the right of the
-  window that follows the selection of any copy (`v` again closes it); `o` reveals in Finder; `c`
+  the default app and marks read (the popup then closes); Space toggles the macOS Quick Look panel,
+  on Linux GNOME Sushi (doesn't mark read; without Sushi it shows or hides the in-pane preview as
+  `p` does, or in the rail opens the `v` pane, with a one-time toast saying Sushi is missing); `p`
+  preview in the pane; `v` opens a preview-only pane on the right of the
+  window that follows the selection of any copy (`v` again closes it); `o` reveals in Finder (the
+  file manager on Linux); `c`
   copies the path or URL (with a toast); `r` read/unread; `d` done (Tab switches to the Done view,
   where `d` or `u` brings it back); Shift-D deletes the item file (no undo); `/` opens a filter box
   (title, note, path; Enter or Down back to the list, Esc clears); `f` opens the filter menu (a
@@ -79,15 +91,17 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   this machine and every other one again now. Each is also a command,
   `readlist.<down|up|top|bottom|open|preview|pane|reveal|copy|read|done|undo|delete|view|find|filter|viewer|focus|install-rl|refresh|claude-files>`,
   which only the copy that had the keyboard last acts on (else the sidebar's).
-- **Opening**: files open with `open`; executable items (`.app`, scripts, `.command`, anything with
-  an execute bit, installers) are revealed in Finder instead, with a toast saying why. Links open in
-  the browser.
+- **Opening**: files open with `open` (Linux: `xdg-open`); executable items (`.app`, scripts,
+  `.command`, anything with an execute bit, installers, and on Linux `.desktop`, `.AppImage`, `.run`,
+  `.deb`, `.rpm`, `.snap`, `.flatpak`...) are revealed in Finder or the file manager instead, with a
+  toast saying why. Links open in the browser. A missing program (`xdg-open`, `gdbus`) gets an
+  error toast naming it.
 - **Re-adding** the same path makes it unread and moves it to the top; `adds` counts.
 - **Drop folder**: anything put in the list folder's `inbox/`, or dropped onto the list, is added
   (from "inbox" or "dropped"); the file stays where it is.
 - **Files Claude Code sends** (off until turned on with the `f` menu's "Files Claude Code sends" or
   `readlist.claude-files`, which toggles it and toasts the new setting): for each Claude Code agent
-  on this Mac in `agents()`, `hc get <t> --json` gives the terminal's foreground pid; Claude Code's
+  on this computer in `agents()`, `hc get <t> --json` gives the terminal's foreground pid; Claude Code's
   `sessions/<pid>.json` (in `$CLAUDE_CONFIG_DIR` or `~/.claude`; the pid's children and
   grandchildren are tried too) gives the session id, and `projects/*/<session id>.jsonl` is the
   transcript. One `sh` script reads every transcript's lines containing `file_uuid` (skipping
@@ -150,15 +164,18 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   and `claude_files`: `on`, `since` and per session the latest send handled; written only by the
   mod with `writeTextFile`'s compare-and-swap).
 - `herdr`: `exec` (`sh -c` scripts with arguments, `open`, `qlmanage -p` and `-t`; with `on` for
-  other machines), `hc` (`machine ls`, for `scp`'s target), `machines`, `readTextFile`,
+  other machines), `window` (`platform`: `macos`, `linux` or `windows`; `core/platform.js` picks
+  the commands from it), `hc` (`machine ls`, for `scp`'s target), `machines`, `readTextFile`,
   `writeTextFile`, `watchFolder`, `nextCommand`, `agents`, `spaces`, `panes`, `focused`, `theme`,
   `settings`, `layout`, `props`, `notify` (with an `action`), `appHome`, `run` (`pane.split`,
   `pane.close`, `pane.focus`), `shared`/`setShared` (`readlist.toasted`, `.quiet`, `.unread`,
   `.selected`, `.viewer`, `.pick`, `.keyboard`), `openOverlay`/`closeOverlay`, `localStorage`.
   `gpui-base`: `v_virtual_list`, `Scrollbar`, `TextView.markdown`, `EditorState`/`Editor`,
   `InputState`/`Input`.
-- `keys.json`: `"global": {"cmd-shift-i": "mod.open:readlist"}`.
-- Programs it runs: `sh`, `open`, `qlmanage`, `stat`, `head`, `ls`, `cp`, `mv`, `rm`, `ps`/`kill`, `pgrep`, `grep`, `awk`, `sed`
+- `keys.json`: `"global": {"cmd-shift-i": "mod.open:readlist", "ctrl-shift-i": "mod.open:readlist"}`.
+  Merge only your platform's: `cmd-shift-i` on macOS, `ctrl-shift-i` on Linux and Windows (free in
+  Herdr's shipped keys there).
+- Programs it runs: `sh`, `open`, `qlmanage` (macOS), `xdg-open`, `gdbus` (Linux, both optional), `stat`, `head`, `ls`, `cp`, `mv`, `rm`, `ps`/`kill`, `pgrep`, `grep`, `awk`, `sed`
   (only the Quick Look panel or thumbnail it started), `base64`, `hc`, `scp` and `shasum` (through
   `rl`); on other machines, through Herdr, `sh`, `cat`, `stat`, `head`, `ls`, `base64`, `dd`, `rm`
   and `cp`/`mv` (installing `rl`). No network beyond Herdr's own connections and `scp`.
@@ -178,8 +195,18 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - The `rl` in the mod may lose its execute bit when copied by a tool: the mod runs it with `sh`.
 - A copy installed under another folder name must change `core/name.js` and the `readlist` in
   `keys.json` and in commands.
-- macOS only (`open`, `qlmanage`, `open -R`). Text previews read the first 512 KiB; folders show
+- Pick commands by `window().platform`, and keep each Linux program optional: check with
+  `command -v` and print what to install. Text previews read the first 512 KiB; folders show
   200 entries.
+- `xdg-open` may keep running as long as the app it started: run it in the background with its
+  output in a file, wait up to 3 s for its exit status, and return; else `exec`'s 30 s limit kills
+  the app with it.
+- D-Bus arguments for `gdbus call` are GVariant text: pass `['file:///...']` and `'file:///...'`
+  with every byte of the path that is not unreserved percent-encoded (a `'` included), so a path
+  can never break out of the literal. `FileManager1.ShowItems` takes `(as, s)`; Sushi's
+  `NautilusPreviewer2.ShowFile` takes `(s uri, s window handle, b close if shown)`, the older
+  `NautilusPreviewer.ShowFile` `(s, i, b)`. An uninstalled service fails at once with
+  `ServiceUnknown`.
 - `stat -f` on Linux prints file-system data and succeeds: try GNU `stat -c` first, BSD `stat -f`
   after.
 - `exec` keeps 8 MiB of output and `hc exec` 8 MB: base64 only up to 5 MiB, chunks above that,
@@ -205,7 +232,7 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   selection and the preview follows; Enter opens the file in its app and the item moves under
   "Read".
 - `d` moves it to the Done view (Tab), and `d` there brings it back; `rl ls --done` agrees.
-- `cmd-shift-i` opens the popup; Esc closes it.
+- `cmd-shift-i` (`ctrl-shift-i` on Linux) opens the popup; Esc closes it.
 - With no `rl` on PATH the banner shows; Install rl puts `~/.local/bin/rl` in place (mode 755) and
   says so; with a different file already at `~/.local/bin/rl` it leaves it and says so.
 - A file copied into `~/.local/state/reading-list/inbox/` appears as an item from "inbox".

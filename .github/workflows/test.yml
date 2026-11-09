@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Node tests
+        run: node --test test/
+      - name: rl tests (sh)
+        run: sh test/rl.test.sh
+      - name: rl tests (dash)
+        run: RL_SHELL=dash sh test/rl.test.sh
+      # herdr-app is the Herdr desktop app; runners don't have it.
+      - name: herdr-app check
+        run: |
+          if command -v herdr-app >/dev/null 2>&1; then
+            herdr-app check mods/readlist
+          else
+            echo "herdr-app is not installed here; skipping the mod check"
+          fi

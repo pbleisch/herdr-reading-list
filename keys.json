@@ -1,5 +1,6 @@
 {
   "global": {
-    "cmd-shift-i": "mod.open:readlist"
+    "cmd-shift-i": "mod.open:readlist",
+    "ctrl-shift-i": "mod.open:readlist"
   }
 }

@@ -5,16 +5,18 @@
 // Herdr reaches is listed every 15 s (its own folder there); its files are fetched into
 // the cache to be opened or drawn (core/remote.js).
 // Lives in the left sidebar under Agents (props {role: "sidebar"}), in a pane, or as the
-// popup (mod.open:readlist, cmd-shift-i). Props {role: "viewer"} is the preview-only pane
+// popup (mod.open:readlist: cmd-shift-i on macOS, ctrl-shift-i on Linux). Props {role: "viewer"} is the preview-only pane
 // `v` opens; props {menu} is a filter menu one of the others opened. When the person turns
 // it on, files Claude Code agents here send with SendUserFile are added too (core/sent.js).
+// Opening, revealing and the Space preview use the platform's tools (core/platform.js).
 // See docs/design.md in the herdr-reading-list repo.
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, VirtualListScrollHandle, TextView, Editor, EditorState, InputState, Input } from "gpui-base";
-import { exec, hc, readTextFile, writeTextFile, watchFolder, nextCommand, agents, spaces, panes, focused, machines, theme, settings, layout, props, notify, appHome, run, shared, setShared, openOverlay, closeOverlay } from "herdr";
+import { exec, hc, readTextFile, writeTextFile, watchFolder, nextCommand, agents, spaces, panes, focused, machines, theme, settings, layout, props, notify, appHome, run, shared, setShared, openOverlay, closeOverlay, window as appWindow } from "herdr";
 import { LIST_SCRIPT, STAT_SCRIPT, STATS_SCRIPT, parseListing, parseStats, typeOf, openAction, itemFile, itemKey } from "./core/items.js";
-import { WIDE, TEXT_BYTES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, parseStat, previewKind, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
+import { WIDE, TEXT_BYTES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, parseStat, previewKind, noThumb, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
+import { MISSING, platformOf, words, openCommand, sushiCommand, quickLook, noQuickLook } from "./core/platform.js";
 import { parseState, serializeState, applyAction, prune, rowsFor, counts, ago, who, isRead, isDone, isChanged, withInbox } from "./core/state.js";
 import { NO_FILTER, applyFilters, filterRows, isFiltered, options, labelFor } from "./core/filters.js";
 import { BURST_MS, arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction } from "./core/arrival.js";
@@ -56,7 +58,7 @@ const TOASTED = "readlist.toasted", QUIET = "readlist.quiet", UNREAD = "readlist
 const SELECTED = "readlist.selected", VIEWER = "readlist.viewer", PICK = "readlist.pick";
 const KEYBOARD = "readlist.keyboard";
 
-// Quick Look in the background, so the panel outlives exec's 30 s limit; prints its pid.
+// macOS: Quick Look in the background, so the panel outlives exec's 30 s limit; prints its pid.
 const PREVIEW_SCRIPT = 'qlmanage -p "$1" >/dev/null 2>&1 </dev/null & echo $!';
 // Closes the panel this mod opened: kills that pid only while it is still qlmanage.
 const CLOSE_SCRIPT = 'case "$(ps -o comm= -p "$1" 2>/dev/null)" in *qlmanage) kill "$1";; *) exit 1;; esac';
@@ -85,6 +87,8 @@ export default class ReadingList extends View {
     // Tells this copy's claims and menu picks from the other copies'.
     this.copy = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
     this.handle = cx.focus_handle();
+    // "macos", "linux" or "windows" (core/platform.js).
+    this.platform = platformOf(appWindow());
     if (props()?.menu) {
       this.at = Math.max(0, this.menuRows().filter((r) => !r.head).findIndex((r) => r.on));
       this.handle.focus();
@@ -281,7 +285,7 @@ export default class ReadingList extends View {
     if (shared(KEYBOARD)?.copy === this.copy) setShared(KEYBOARD, props()?.menu ? this.before : null);
   }
 
-  // The cmd-shift-i popup (an overlay that is not a filter menu).
+  // The cmd-shift-i (ctrl-shift-i on Linux) popup (an overlay that is not a filter menu).
   popup() {
     return Boolean(props()?.overlay) && !props()?.menu;
   }
@@ -781,13 +785,13 @@ export default class ReadingList extends View {
     if (item.path && item.machine) {
       const c = await this.copyFor(item, "Enter");
       if (!c) return false;
-      const act = openAction({ ...item, path: c.path }, c.st.kind);
-      const r = await exec("open", act.how === "reveal" ? ["-R", act.target] : [act.target]).catch((e) => ({ code: 1, stderr: String(e) }));
+      const act = openAction({ ...item, path: c.path }, c.st.kind, this.platform);
+      const r = await this.launch(act.how, act.target);
       if (r.code !== 0) {
         notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${r.stderr.trim()}`, level: "error" });
         return false;
       }
-      if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so its copy is shown in Finder instead of opened.`, level: "info" });
+      if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so its copy is shown in ${words(this.platform).files} instead of opened.`, level: "info" });
       await this.mark(itemKey(item), "read", cx, c.st.mtime);
       return true;
     }
@@ -797,22 +801,31 @@ export default class ReadingList extends View {
       kind = st.fs[item.path];
       mtime = st.mt[item.path];
     }
-    const act = openAction(item, kind);
+    const act = openAction(item, kind, this.platform);
     if (act.how === "missing") {
       notify({ title: "Reading list", body: `${item.title} is gone: ${item.path}`, level: "warning" });
       return false;
     }
     if (act.how === "url") cx.open_url(act.target);
     else {
-      const r = await exec("open", act.how === "reveal" ? ["-R", act.target] : [act.target]).catch((e) => ({ code: 1, stderr: String(e) }));
+      const r = await this.launch(act.how, act.target);
       if (r.code !== 0) {
         notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${r.stderr.trim()}`, level: "error" });
         return false;
       }
-      if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so it's shown in Finder instead of opened.`, level: "info" });
+      if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so it's shown in ${words(this.platform).files} instead of opened.`, level: "info" });
     }
     await this.mark(itemKey(item), "read", cx, mtime);
     return true;
+  }
+
+  // Opens (how "open") or reveals (how "reveal") a file with the platform's tools
+  // (core/platform.js): `open` on macOS, xdg-open and the file manager on Linux. A missing
+  // tool comes back as a failure whose stderr says what to install.
+  async launch(how, path) {
+    const c = openCommand(this.platform, how, path);
+    if (!c) return { code: 1, stdout: "", stderr: "this platform is not supported yet" };
+    return exec(c.command, c.args).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
   }
 
   // Opens an item; the popup then closes (Enter opens and closes it, docs/design.md 4.1).
@@ -822,20 +835,23 @@ export default class ReadingList extends View {
     });
   }
 
-  // Space: the macOS Quick Look panel, a toggle like Finder's. Never marks read and never
-  // runs anything (Quick Look only draws a preview).
-  async preview(item) {
+  // Space: a preview window, a toggle like Finder's: the macOS Quick Look panel, or GNOME
+  // Sushi on Linux. Without one (no Sushi, Windows) the in-pane preview instead. Never marks
+  // read and never runs anything (both only draw a preview).
+  async preview(item, cx) {
+    const look = quickLook(this.platform, this.noSushi);
+    if (look === "pane") return this.previewHere(item, cx);
     const open = this.quicklook;
     this.quicklook = null;
-    if (open) {
+    if (open && look === "qlmanage") {
       const r = await exec("sh", ["-c", CLOSE_SCRIPT, "readlist", open.pid]).catch(() => null);
       if (r?.code === 0 && open.id === itemKey(item)) return;
     }
     if (!item.path) {
-      notify({ title: "Reading list", body: "Quick Look has no preview for a link; Enter opens it.", level: "info" });
+      notify({ title: "Reading list", body: look === "qlmanage" ? "Quick Look has no preview for a link; Enter opens it." : "A link has no preview window; Enter opens it.", level: "info" });
       return;
     }
-    // Another machine's file: Quick Look shows its local copy.
+    // Another machine's file: the preview window shows its local copy.
     let path = item.path;
     if (item.machine) {
       const c = await this.copyFor(item, "Space");
@@ -848,6 +864,7 @@ export default class ReadingList extends View {
         return;
       }
     }
+    if (look === "sushi") return this.sushi(item, path, open, cx);
     const r = await exec("sh", ["-c", PREVIEW_SCRIPT, "readlist", path]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
     const pid = r.stdout.trim();
     if (r.code !== 0 || !/^\d+$/.test(pid)) {
@@ -855,6 +872,35 @@ export default class ReadingList extends View {
       return;
     }
     this.quicklook = { id: itemKey(item), pid };
+  }
+
+  // Linux: GNOME Sushi shows `path`; Space again on the same item closes it. When there is
+  // no Sushi (or no gdbus), says so once and shows the in-pane preview from then on.
+  async sushi(item, path, open, cx) {
+    const again = open?.id === itemKey(item);
+    const c = sushiCommand(path, again);
+    const r = await exec(c.command, c.args).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+    const why = r.stdout.trim();
+    if (r.code === MISSING && (why === "no-sushi" || why === "no-gdbus")) {
+      this.noSushi = why;
+      return this.previewHere(item, cx);
+    }
+    if (r.code !== 0) {
+      notify({ title: "Reading list", body: `Couldn't preview ${item.title}: ${r.stderr.trim() || why}`, level: "error" });
+      return;
+    }
+    this.quicklook = again ? null : { id: itemKey(item) };
+  }
+
+  // Space without a preview window: shows or hides the in-pane preview (as `p` does), or in
+  // the narrow rail opens the viewer pane (as `v`). The first time, a toast says why.
+  previewHere(item, cx) {
+    if (!this.lookHinted) {
+      this.lookHinted = true;
+      notify({ title: "Reading list", body: noQuickLook(this.platform, this.noSushi), level: "info", timeout: 6000 });
+    }
+    if (this.rail()) return this.toggleViewer({ item }, cx);
+    this.choice = !previewShown(this.width, this.choice);
   }
 
   // The in-pane preview of `item`, at most one being made at a time; the latest selection
@@ -912,7 +958,7 @@ export default class ReadingList extends View {
       if (on) return { ...base, how: "offline", error: String(e?.message ?? e) };
       throw e;
     }
-    let kind = previewKind(item, st.kind);
+    let kind = previewKind(item, st.kind, this.platform);
     const run = async (script, args, where = null) => {
       const r = await exec("sh", ["-c", script, "readlist", ...args], { on: where, timeout: 60000 });
       if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
@@ -930,7 +976,7 @@ export default class ReadingList extends View {
       }
       if (typeof raw !== "string") raw = await run(HEAD_SCRIPT, [item.path], on);
       const text = previewText(raw, st.size);
-      if (text === null) kind = { how: "thumb" };
+      if (text === null) kind = noThumb(this.platform);
       else if (kind.how === "markdown") return { ...base, how: "markdown", text: stripThreads(text) };
       else {
         const t = theme();
@@ -939,6 +985,8 @@ export default class ReadingList extends View {
           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } }) };
       }
     }
+    // No thumbnails on this platform: the type's icon.
+    if (kind.how === "icon") return { ...base, how: "icon", type: typeOf(item, st.kind) };
     const name = cacheName(item.id, st, kind, size);
     const how = kind.how === "image" ? "copy" : String(size);
     if (on) {
@@ -955,11 +1003,12 @@ export default class ReadingList extends View {
     return { ...base, how: "image", src: `${CACHE}/${name}`, thumb: kind.how === "thumb" };
   }
 
-  // o: show the item in Finder (another machine's: its local copy). Revealing never opens
-  // or runs anything.
+  // o: show the item in Finder or the file manager (another machine's: its local copy).
+  // Revealing never opens or runs anything.
   async reveal(item) {
+    const files = words(this.platform).files;
     if (!item.path) {
-      notify({ title: "Reading list", body: "A link has no file to show in Finder; Enter opens it.", level: "info" });
+      notify({ title: "Reading list", body: `A link has no file to show in ${files}; Enter opens it.`, level: "info" });
       return;
     }
     let path = item.path;
@@ -968,8 +1017,8 @@ export default class ReadingList extends View {
       if (!c) return;
       path = c.path;
     }
-    const r = await exec("open", ["-R", path]).catch((e) => ({ code: 1, stderr: String(e) }));
-    if (r.code !== 0) notify({ title: "Reading list", body: `Couldn't show ${item.title} in Finder: ${r.stderr.trim()}`, level: "error" });
+    const r = await this.launch("reveal", path);
+    if (r.code !== 0) notify({ title: "Reading list", body: `Couldn't show ${item.title} in ${files}: ${r.stderr.trim()}`, level: "error" });
   }
 
   // Shift-D: take the item off the list, as `rl rm` does (removes its file, on its machine).
@@ -1098,7 +1147,7 @@ export default class ReadingList extends View {
       case "bottom": move(items.length - 1); break;
       case "open": if (cur) this.openAndClose(cur.item, cx); break;
       // A copy fetched from another machine shows in its row once these finish.
-      case "preview": if (cur) cx.spawn(async (cx) => { await this.preview(cur.item); cx.notify(); }); break;
+      case "preview": if (cur) cx.spawn(async (cx) => { await this.preview(cur.item, cx); cx.notify(); }); break;
       case "read":
         if (cur) this.mark(itemKey(cur.item), cur.read && this.view === "list" ? "unread" : "read", cx, cur.item.path ? this.mt[itemKey(cur.item)] : null);
         break;
@@ -1255,6 +1304,12 @@ export default class ReadingList extends View {
         return Editor.new(pv.code).flex_1().min_h(0);
       case "image":
         return div().flex_1().min_h(0).p(12).child(image(pv.src).size_full());
+      case "icon":
+        return v_flex().flex_1().min_h(0).p(14).gap(12).items_center().justify_center()
+          .child(svg(`${ICONS}/${ICON[pv.type] ?? "file"}.svg`).size(48).text_color(t.muted))
+          .child(div().text_size(12).text_color(t.dim).child(this.platform === "linux" && !this.noSushi
+            ? "No thumbnail for this type here. Enter opens it; Space shows it in GNOME Sushi."
+            : "No thumbnail for this type here. Enter opens it."));
       case "offline":
         return v_flex().p(14).gap(8).items_start()
           .child(div().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("offline"))
@@ -1267,7 +1322,7 @@ export default class ReadingList extends View {
             .child(svg(`${ICONS}/${e.dir ? "folder" : "file"}.svg`).size(13).flex_none().text_color(t.muted))
             .child(div().flex_1().min_w(0).truncate().text_size(12).child(e.name))))
           .when(pv.folder.entries.length === 0, (el) => el.child(message("An empty folder.")))
-          .when(pv.folder.more, (el) => el.child(div().p(4).text_size(11).text_color(t.dim).child(`First ${pv.folder.entries.length} entries; Enter opens the folder in Finder.`)));
+          .when(pv.folder.more, (el) => el.child(div().p(4).text_size(11).text_color(t.dim).child(`First ${pv.folder.entries.length} entries; Enter opens the folder in ${words(this.platform).files}.`)));
       default:
         return message(`Can't preview this: ${pv.error}`);
     }
@@ -1280,7 +1335,7 @@ export default class ReadingList extends View {
     const where = item.machine && item.path ? `${item.machine}:${item.path}` : item.path ?? item.url;
     // Another machine's file: where the preview comes from.
     const source = !item.machine || !item.path ? null
-      : this.fetched.has(k) ? `${fetchedLabel(item.machine, this.fetched.get(k))}; edits to the copy stay on this Mac`
+      : this.fetched.has(k) ? `${fetchedLabel(item.machine, this.fetched.get(k))}; edits to the copy stay on ${words(this.platform).here}`
       : `on ${item.machine}`;
     return v_flex().id("rl-preview").min_w(0).min_h(0).bg(t.background)
       .when(how === "side", (el) => el.flex_1().h_full().border_l(1).border_color(t.border))

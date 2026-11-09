@@ -186,7 +186,8 @@ folder, with `from: "dropped"` and no toast (the person put it there; `shared("r
   as a compact rail when the sidebar is narrower than 160 px (an icon per item and an unread dot).
 - **A mod pane** (`pane.split {direction: "right", mod: "readlist"}`, row 2) also works, as a
   pane beside an agent or as its own tab, with the same list. Saved with its tab.
-- **A popup** for a quick look from anywhere: `mod.open:readlist` on `cmd-shift-i` (increment 3,
+- **A popup** for a quick look from anywhere: `mod.open:readlist` on `cmd-shift-i` (`ctrl-shift-i`
+  on Linux and Windows, free in Herdr's shipped keys there; increment 3,
   the repo's `keys.json`, merged by the install only where the key is free). The popup is the same
   mod drawn in a compact layout (no side preview; `p` shows it below the list); it takes the
   keyboard when it opens, and Enter opens the item, saves the read mark, then closes the popup.
@@ -321,7 +322,7 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
   tab-bar clone could show a badge later; this design does not clone or change shipped mods.
 - Items added with `--kind fyi` are listed but do not toast.
 
-### 4.5 Preview and open, per type (macOS)
+### 4.5 Preview and open, per type (macOS; Linux below)
 
 | Type | In-pane preview | Enter (open) |
 |---|---|---|
@@ -358,6 +359,28 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
   shell string.
 - Sizes from `on_size_change` are zoomed pixels; divide by `settings().zoom` before choosing a
   thumbnail size (herdr-md's note).
+
+**Linux.** `core/platform.js` picks the commands from `window().platform`; macOS keeps the calls
+above unchanged, and every Linux program is optional (checked with `command -v`; when missing, the
+script exits 127 and says what to install, and the mod shows that in a toast).
+
+- Open is `xdg-open "$1"` in the background with its stderr in a temporary file; the script waits
+  up to 3 s for its exit status and then returns, so an opener that stays running with its app is
+  not killed by `exec`'s limit.
+- Reveal (`o`, and Enter on an item that could run) is the freedesktop
+  `org.freedesktop.FileManager1.ShowItems(['file:///...'], '')` call through `gdbus`, answered by
+  Nautilus, Dolphin, Nemo, Caja, Thunar and others; else `xdg-open` on the item's folder. The
+  reveal-instead-of-open rule adds Linux launchers and packages (`.desktop`, `.AppImage`, `.run`,
+  `.bin`, `.deb`, `.rpm`, `.snap`, `.flatpak`, `.flatpakref`, `.flatpakrepo`).
+- Space is GNOME Sushi: `org.gnome.NautilusPreviewer2.ShowFile(uri, '', close)` (the older
+  `org.gnome.NautilusPreviewer.ShowFile(uri, 0, close)` second), D-Bus starting Sushi on demand;
+  Space again on the same item passes `close` true. With no Sushi (`ServiceUnknown`) or no
+  `gdbus`, a one-time toast says so and Space shows or hides the in-pane preview instead (in the
+  narrow rail, the `v` pane).
+- Thumbnails: none. Images GPUI draws are copied into the cache and shown as on macOS; HTML, PDF,
+  other images and binary files show their type's icon with "Enter opens it".
+- Paths reach D-Bus as GVariant string literals with every byte that is not unreserved
+  percent-encoded, so no path can end the literal.
 
 ### 4.6 Remote items
 
@@ -430,7 +453,7 @@ herdr-reading-list/            laid out like a herdr-app home, so it can be shar
   mods/readlist/main.js, mod.json, icons/*.svg
   mods/readlist/core/          pure logic (item parse, sort, filters, state merge), node-testable
   mods/readlist/bin/rl         the POSIX sh producer; travels with the mod
-  keys.json                    cmd-shift-i opens the popup (merged only where the key is free)
+  keys.json                    cmd-shift-i (macOS) / ctrl-shift-i (Linux) open the popup (each platform merges its own, only where free)
   RECIPE.md, preview.png       the herdr.dev brief and screenshot
   skill/reading-list/SKILL.md  for agents: when to add, the rl commands, the zero-install fallback
   bin/rl                       a link to mods/readlist/bin/rl

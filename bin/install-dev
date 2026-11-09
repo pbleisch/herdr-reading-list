@@ -1,9 +1,10 @@
 #!/bin/sh
-# Dev install on this Mac:
+# Dev install on this computer (macOS or Linux):
 #   1. copies mods/readlist into the Herdr app's mods/readlist (a copy: a symlinked mod
 #      neither hot-reloads nor writes) and checks it;
-#   2. adds the keys in keys.json (cmd-shift-i opens the popup) to the person's keys.json
-#      where they are free, never replacing a key in use;
+#   2. adds this platform's keys in keys.json (cmd-shift-i on macOS, ctrl-shift-i on Linux
+#      opens the popup) to the person's keys.json where they are free, never replacing a
+#      key in use;
 #   3. unless --no-link, links mods/readlist/bin/rl into ~/.local/bin;
 #   4. unless --no-layout, clones the shown layout as <name>-readlist, puts the reading
 #      list under Agents in the clone, and switches to it. Shipped layouts are read-only,

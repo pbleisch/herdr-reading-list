@@ -3,12 +3,25 @@
 A reading list for [Herdr](https://herdr.dev). Your agents and tools put files (markdown they
 wrote, screenshots, HTML reports, PDFs, folders) or URLs on the list with one command, `rl add`,
 and a note saying why. The list shows who added each item, previews it in place, and opens it in its
-macOS app when you press Enter.
+default app when you press Enter.
 
 ![Reading list](preview.png)
 
-**macOS only.** Opening, Quick Look, thumbnails and "show in Finder" use macOS tools (`open`,
-`qlmanage`).
+## Platforms
+
+| | Open (Enter) | Show in the file manager (`o`) | Space: preview window | Thumbnails in the pane | Popup key |
+|---|---|---|---|---|---|
+| macOS | `open` | Finder (`open -R`) | Quick Look | Quick Look (HTML, PDF, ...) | `cmd-shift-i` |
+| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | GNOME Sushi, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+| Windows | coming | | | | |
+
+macOS has everything. Linux is supported: opening needs `xdg-open` (xdg-utils), showing in the file
+manager works with any file manager that answers the freedesktop `FileManager1` call (Nautilus,
+Dolphin, Nemo, Caja, Thunar...), and the Space preview window needs GNOME Sushi (the `sushi`
+package). Without Sushi, Space shows or hides the preview in the pane instead and says so once;
+when a program is missing, the list says which one instead of failing quietly. Markdown, text, code,
+images and folders preview in the pane on both. Items on other machines are listed from macOS and
+Linux alike.
 
 ## Install
 
@@ -19,10 +32,12 @@ Ask your Herdr agent:
 It reads [RECIPE.md](RECIPE.md) and the files, copies `mods/readlist` into your Herdr home
 (`~/.config/herdr-app/mods/readlist`), merges `keys.json` into yours where the key is free, and
 checks the mod. To do it by hand, copy the `mods/readlist` folder there yourself, add the key in
-`keys.json` to your own `keys.json`, and run `herdr-app check ~/.config/herdr-app/mods/readlist`.
+`keys.json` for your platform to your own `keys.json` (`cmd-shift-i` on macOS, `ctrl-shift-i` on
+Linux), and run `herdr-app check ~/.config/herdr-app/mods/readlist`.
 
-What the mod does on your Mac: it runs programs (`sh` scripts, `open`, `qlmanage` for Quick Look
-and thumbnails, and its own `rl`), reads the files on the list wherever they are (and, only if
+What the mod does on your computer: it runs programs (`sh` scripts, its own `rl`, and on macOS
+`open` and `qlmanage` for Quick Look and thumbnails, on Linux `xdg-open` and `gdbus` for the file
+manager and GNOME Sushi), reads the files on the list wherever they are (and, only if
 you turn on "Files Claude Code sends", Claude Code's session files and transcripts), and writes only
 its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin/rl`. On other
 machines Herdr reaches, it reads their list folder and the files on it through Herdr every 15 s,
@@ -33,7 +48,8 @@ fetch (a URL item opens in your browser).
 
 Then open it:
 
-- `cmd-shift-i` opens the list as a popup over the window (`mod.open:readlist`);
+- `cmd-shift-i` (`ctrl-shift-i` on Linux) opens the list as a popup over the window
+  (`mod.open:readlist`);
 - `herdr-app do pane.split '{"direction":"right","mod":"readlist"}'` opens it as a pane;
 - or add a block with `{"mod": "readlist", "props": {"role": "sidebar"}}` to your layout, for
   example under the agents list in the left sidebar.
@@ -71,7 +87,7 @@ skills can be given the file's text in its instructions instead.
 
 Claude Code agents can already send you a file with their SendUserFile tool. Turn on **Files
 Claude Code sends** (in the `f` filter menu, under "Also add", or
-`herdr-app do readlist.claude-files`) and every file a Claude Code agent on this Mac sends from
+`herdr-app do readlist.claude-files`) and every file a Claude Code agent on this computer sends from
 then on also lands on the list, as a `result` from that agent with the send's caption as the note,
 without the agent running `rl`. It is off until you turn it on; the same entry turns it off.
 
@@ -113,10 +129,10 @@ In the list:
 |---|---|
 | click, `j` / `k`, arrows, `g` / `G` | select (selecting never opens anything) |
 | Enter, double-click | open in its app; marks it read |
-| Space | Quick Look panel (again closes it) |
+| Space | Quick Look panel on macOS, GNOME Sushi on Linux (again closes it) |
 | `p` | show or hide the preview in the pane |
 | `v` | a preview pane on the right of the window that follows the selection |
-| `o` | show in Finder |
+| `o` | show in Finder (the file manager on Linux) |
 | `c` | copy the path or URL |
 | `r` | read / unread |
 | `d` | done (Tab shows the Done view, where `d` or `u` brings it back) |
@@ -126,12 +142,14 @@ In the list:
 | Shift-R | list this machine and every other one again now |
 
 Each key is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can bind in
-`keys.json`. Global: `cmd-shift-i` opens the popup.
+`keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux) opens the popup.
 
 In a pane 520 px or wider, the selected item's preview shows beside the list: markdown rendered,
-text and code highlighted, images, a Quick Look thumbnail of HTML, PDF and anything else Quick Look
-can draw, a folder's entries. Narrower, `p` shows it below the list. A read item whose file changed
-since shows a "changed" chip. Executable items (apps, scripts) are shown in Finder, never opened.
+text and code highlighted, images, a folder's entries, and on macOS a Quick Look thumbnail of HTML,
+PDF and anything else Quick Look can draw (on Linux those show their type's icon). Narrower, `p`
+shows it below the list. A read item whose file changed since shows a "changed" chip. Executable
+items (apps, scripts, and on Linux `.desktop` files, AppImages and packages) are shown in the file
+manager, never opened.
 
 ### Other machines
 
@@ -140,7 +158,7 @@ goes in that machine's own list folder, and the list here shows it with the mach
 list reads each machine every 15 s (Shift-R reads them now). Markdown and text previews are read
 on that machine; to open, Quick Look or show an image, the file is first fetched into the mod's
 `.cache/`, and fetched again when it changes there. The row then says "copy from devbox, fetched
-18:42"; edits to the copy stay on your Mac. A file over 50 MiB is fetched only when you press Enter
+18:42"; edits to the copy stay on your computer. A file over 50 MiB is fetched only when you press Enter
 twice. A machine that stops answering keeps its items, with an "offline" chip, until it answers
 again. Windows machines have no list.
 
@@ -150,7 +168,7 @@ again. Windows machines have no list.
 rm -rf ~/.config/herdr-app/mods/readlist
 ```
 
-Then remove the `cmd-shift-i` line from your `~/.config/herdr-app/keys.json` and any `readlist`
+Then remove the `cmd-shift-i` (or `ctrl-shift-i`) line from your `~/.config/herdr-app/keys.json` and any `readlist`
 block from your layouts. If you installed `rl`, delete `~/.local/bin/rl` (on each machine you
 installed it on). Your list stays in
 `~/.local/state/reading-list/` until you delete that folder too.
@@ -163,11 +181,13 @@ bin/install-dev   # copy the mod into Herdr, merge keys, link rl, add the list t
 ```
 
 `bin/install-dev` copies `mods/readlist` to `~/.config/herdr-app/mods/readlist` (a copy: a
-symlinked mod neither hot-reloads nor writes) and checks it, merges `keys.json` where keys are free
-(`bin/merge-keys.mjs`), links `~/.local/bin/rl` to the checkout's `mods/readlist/bin/rl`, and
+symlinked mod neither hot-reloads nor writes) and checks it, merges this platform's keys from
+`keys.json` where they are free (`bin/merge-keys.mjs`: of a `cmd-` and `ctrl-` pair bound to one
+action, macOS takes the `cmd-` key and Linux the `ctrl-` one), links `~/.local/bin/rl` to the checkout's `mods/readlist/bin/rl`, and
 (optional) clones the shown layout as `<name>-readlist` with the list under Agents in the left
 sidebar (`layout/add-to-sidebar.mjs`) and switches to it; `ctrl-shift-l` switches back.
 `--no-layout` skips the layout step, `--no-link` the link. `bin/rl` is a link to the mod's `rl`.
+CI (`.github/workflows/test.yml`) runs the tests on Linux and macOS.
 
 [docs/design.md](docs/design.md) has the design. MIT licence; the icons are
 [Lucide](https://lucide.dev) (ISC, see `mods/readlist/icons/LICENSE`).
