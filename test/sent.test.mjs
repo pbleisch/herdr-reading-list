@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { SCAN_SCRIPT, SENT_ADD_SCRIPT, KEEP_MS, isClaudeAgent, foregroundPid, parseSendLine, parseScan, parseSent, sentOn, setSent, sentPlan, sentAddArgs, sentFrom } from "../mods/readlist/core/sent.js";
 import { parseState, serializeState, applyAction, prune, withInbox } from "../mods/readlist/core/state.js";
 
-const repo = new URL("..", import.meta.url).pathname;
+import { repo, posix } from "./support.mjs";
 const RL = join(repo, "mods/readlist/bin/rl");
 const sh = (script, ...args) => execFileSync("sh", ["-c", script, "t", ...args], { encoding: "utf8" });
 const scratch = (name) => realpathSync(mkdtempSync(join(tmpdir(), name)));
@@ -157,7 +157,7 @@ function claudeHome() {
 }
 const sessionFile = (cfg, pid, sid) => writeFileSync(join(cfg, "sessions", `${pid}.json`), JSON.stringify({ pid, sessionId: sid, cwd: "/w", kind: "interactive", status: "idle" }));
 
-test("SCAN_SCRIPT finds each terminal's transcript and its sends, and skips what is missing or broken", () => {
+test("SCAN_SCRIPT finds each terminal's transcript and its sends, and skips what is missing or broken", posix, () => {
   const cfg = claudeHome();
   sessionFile(cfg, 900001, "aaaa-1111");
   const t1 = join(cfg, "projects/-w/aaaa-1111.jsonl");
@@ -183,7 +183,7 @@ test("SCAN_SCRIPT finds each terminal's transcript and its sends, and skips what
   assert.equal(sh(SCAN_SCRIPT, join(cfg, "missing"), "t1", "900001", ""), "");
 });
 
-test("SCAN_SCRIPT finds the session of a program the terminal's foreground process started", async () => {
+test("SCAN_SCRIPT finds the session of a program the terminal's foreground process started", posix, async () => {
   const cfg = claudeHome();
   // A wrapper (the foreground pid) whose child is the program that keeps the session file.
   const wrapper = spawn("sh", ["-c", "sleep 30 & wait"], { stdio: "ignore" });
@@ -203,7 +203,7 @@ test("SCAN_SCRIPT finds the session of a program the terminal's foreground proce
   }
 });
 
-test("SENT_ADD_SCRIPT adds sent files as results, skips gone ones, and leaves items already on the list", () => {
+test("SENT_ADD_SCRIPT adds sent files as results, skips gone ones, and leaves items already on the list", posix, () => {
   const home = scratch("rl-sent-");
   const list = join(home, "list");
   writeFileSync(join(home, "report.md"), "# Weekly report\n");
@@ -248,7 +248,7 @@ test("SENT_ADD_SCRIPT adds sent files as results, skips gone ones, and leaves it
   assert.deepEqual([notes.by.terminal, notes.by.from, notes.note, notes.kind], [null, "Claude Code t7", null, "result"]);
 });
 
-test("a scan, a plan and an add, end to end, add each sent file once", () => {
+test("a scan, a plan and an add, end to end, add each sent file once", posix, () => {
   const cfg = claudeHome();
   const home = scratch("rl-e2e-");
   const list = join(home, "list");

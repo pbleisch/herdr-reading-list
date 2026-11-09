@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MARK, RL_STATUS_SCRIPT, INSTALL_RL_SCRIPT, parseRlStatus, rlBanner, installToast } from "../mods/readlist/core/install.js";
 
-const repo = new URL("..", import.meta.url).pathname;
+import { repo, posix } from "./support.mjs";
 const rl = join(repo, "mods/readlist/bin/rl");
 
 // A scratch home, and a run of a script there with PATH set to `path` (folders under it).
@@ -23,7 +23,7 @@ test("the mod's rl carries the mark", () => {
   assert.ok(readFileSync(rl, "utf8").includes(MARK));
 });
 
-test("RL_STATUS_SCRIPT tells missing, off PATH, ok and another program", () => {
+test("RL_STATUS_SCRIPT tells missing, off PATH, ok and another program", posix, () => {
   const { home, run } = scratch();
   assert.deepEqual(parseRlStatus(run(RL_STATUS_SCRIPT, [".local/bin"])), { state: "missing", path: "" });
   mkdirSync(join(home, ".local/bin"), { recursive: true });
@@ -36,7 +36,7 @@ test("RL_STATUS_SCRIPT tells missing, off PATH, ok and another program", () => {
   assert.equal(parseRlStatus("garbage").state, "unknown");
 });
 
-test("INSTALL_RL_SCRIPT copies, then reports the same file, and updates an older copy", () => {
+test("INSTALL_RL_SCRIPT copies, then reports the same file, and updates an older copy", posix, () => {
   const { home, run } = scratch();
   const dest = join(home, ".local/bin/rl");
   let out = run(INSTALL_RL_SCRIPT, [".local/bin"], rl);
@@ -53,7 +53,7 @@ test("INSTALL_RL_SCRIPT copies, then reports the same file, and updates an older
   assert.match(id.trim(), /^[0-9a-f]{16}$/);
 });
 
-test("INSTALL_RL_SCRIPT never replaces another program or a link", () => {
+test("INSTALL_RL_SCRIPT never replaces another program or a link", posix, () => {
   const { home, run } = scratch();
   const dest = join(home, ".local/bin/rl");
   mkdirSync(join(home, ".local/bin"), { recursive: true });
@@ -76,7 +76,7 @@ test("INSTALL_RL_SCRIPT never replaces another program or a link", () => {
   assert.equal(run3(INSTALL_RL_SCRIPT, [".local/bin"], rl).split("\t")[0], "same");
 });
 
-test("INSTALL_RL_SCRIPT says when ~/.local/bin is not on PATH, or another rl comes first", () => {
+test("INSTALL_RL_SCRIPT says when ~/.local/bin is not on PATH, or another rl comes first", posix, () => {
   const { home, run } = scratch();
   assert.equal(run(INSTALL_RL_SCRIPT, [], rl), "installed\t~/.local/bin/rl\t0\t\n");
   mkdirSync(join(home, "other"));

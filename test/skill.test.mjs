@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeItem } from "../mods/readlist/core/items.js";
 
-const repo = new URL("..", import.meta.url).pathname;
+import { repo, posix } from "./support.mjs";
 const skill = readFileSync(join(repo, "skill/reading-list/SKILL.md"), "utf8");
 
-test("the skill's zero-install item is one the mod and rl read", () => {
+test("the skill's zero-install item is one the mod and rl read", posix, () => {
   const example = JSON.parse(skill.match(/```json\n([\s\S]*?)\n```/)[1]);
   assert.ok(normalizeItem(example), "the mod accepts the example");
 
@@ -40,7 +40,7 @@ test("the skill installs as a standard agent skill", () => {
   assert.deepEqual(Object.keys(fields).sort(), ["description", "name"]);
 });
 
-test("every rl option and kind the skill names is one rl takes", () => {
+test("every rl option and kind the skill names is one rl takes", posix, () => {
   const usage = execFileSync(join(repo, "mods/readlist/bin/rl"), ["--help"], { encoding: "utf8" });
   const named = new Set(skill.match(/--[a-z][a-z-]+/g));
   for (const opt of named) assert.ok(usage.includes(opt), `rl --help lists ${opt}`);

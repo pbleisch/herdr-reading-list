@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { posix } from "./support.mjs";
 import { normalizeItem, openAction } from "../mods/readlist/core/items.js";
 import { previewKind, THUMB } from "../mods/readlist/core/preview.js";
 import { LINUX_RUNS, platformOf, words, noQuickLook } from "../mods/readlist/core/platform.js";

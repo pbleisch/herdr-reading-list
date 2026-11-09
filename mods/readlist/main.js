@@ -5,36 +5,41 @@
 // Herdr reaches is listed every 15 s (its own folder there); its files are fetched into
 // the cache to be opened or drawn (core/remote.js).
 // Lives in the left sidebar under Agents (props {role: "sidebar"}), in a pane, or as the
-// popup (mod.open:readlist: cmd-shift-i on macOS, ctrl-shift-i on Linux). Props {role: "viewer"} is the preview-only pane
+// popup (mod.open:readlist: cmd-shift-i on macOS, ctrl-shift-i on Linux and Windows). Props {role: "viewer"} is the preview-only pane
 // `v` opens; props {menu} is a filter menu one of the others opened. When the person turns
 // it on, files Claude Code agents here send with SendUserFile are added too (core/sent.js).
 // Opening, revealing, the Space preview and thumbnails go to action handlers: the
 // platform's built-in one, and first the person's own when they turned it on
 // (core/handlers.js).
+// The small programs it runs here are sh scripts on macOS and Linux and, on Windows, the
+// PowerShell 7 helper in bin/windows (core/helpers.js); on other machines, sh scripts.
 // See docs/design.md in the herdr-reading-list repo.
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, VirtualListScrollHandle, TextView, Editor, EditorState, InputState, Input } from "gpui-base";
 import { exec, hc, readTextFile, writeTextFile, watchFolder, nextCommand, agents, spaces, panes, focused, machines, theme, settings, layout, props, notify, appHome, run, shared, setShared, openOverlay, closeOverlay, window as appWindow } from "herdr";
-import { LIST_SCRIPT, STAT_SCRIPT, STATS_SCRIPT, parseListing, parseStats, typeOf, openAction, itemFile, itemKey } from "./core/items.js";
-import { WIDE, TEXT_BYTES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, THUMB, parseStat, previewKind, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
+import { parseListing, parseStats, typeOf, openAction, itemFile, itemKey } from "./core/items.js";
+import { WIDE, TEXT_BYTES, THUMB, parseStat, previewKind, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
 import { platformOf, words, noQuickLook } from "./core/platform.js";
-import { TIMEOUT_MS, THUMB_SECONDS, USER_HANDLER, TRUST_FILE, RUNNER, chain, runChain, token, outcome, parseTrust, serializeTrust, parseCheck, handlerState, handlerBanner } from "./core/handlers.js";
+import { TIMEOUT_MS, THUMB_SECONDS, TRUST_FILE, userHandler, chain, checkCall, runChain, token, outcome, parseTrust, serializeTrust, parseCheck, handlerState, handlerBanner } from "./core/handlers.js";
+import { helperCall, rlFile, rlSource } from "./core/helpers.js";
+import { joinPath } from "./core/paths.js";
+import { noPwsh, NEEDS_PWSH } from "./core/windows.js";
 import { parseState, serializeState, applyAction, prune, rowsFor, counts, ago, who, isRead, isDone, isChanged, withInbox } from "./core/state.js";
 import { NO_FILTER, applyFilters, filterRows, isFiltered, options, labelFor } from "./core/filters.js";
 import { BURST_MS, arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction } from "./core/arrival.js";
-import { INBOX_SCRIPT, ADD_SCRIPT, parseInbox, inboxPlan } from "./core/inbox.js";
-import { SCAN_SCRIPT, SENT_ADD_SCRIPT, isClaudeAgent, foregroundPid, parseScan, sentPlan, sentOn, setSent, sentAddArgs } from "./core/sent.js";
+import { parseInbox, inboxPlan } from "./core/inbox.js";
+import { isClaudeAgent, foregroundPid, parseScan, sentPlan, sentOn, setSent, sentAddArgs } from "./core/sent.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "./core/viewer.js";
 import { NAME } from "./core/name.js";
-import { RL_STATUS_SCRIPT, INSTALL_RL_SCRIPT, INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
-import { POLL_MS, POLL_TIMEOUT_MS, ASK_MS, POLL_SCRIPT, BASE64_SCRIPT, DECODE_SCRIPT, CHUNKS_SCRIPT, PRUNE_COPIES_SCRIPT, parsePoll, afterPoll, syncMachines, pollPaths, unstated, mergeItems, onMachine, listedMachines, isOffline, safeName, copyPaths, parseMeta, isStale, fetchRoute, needsAsk, fetchedLabel, sizeLabel, remoteBanner } from "./core/remote.js";
+import { INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
+import { POLL_MS, POLL_TIMEOUT_MS, ASK_MS, POLL_SCRIPT, BASE64_SCRIPT, parsePoll, afterPoll, syncMachines, pollPaths, unstated, mergeItems, onMachine, listedMachines, isOffline, safeName, copyPaths, parseMeta, isStale, fetchRoute, needsAsk, fetchedLabel, sizeLabel, remoteBanner } from "./core/remote.js";
 
 // This mod's folder under the app home (core/name.js).
 const MOD = `mods/${NAME}`;
 const ICONS = `${MOD}/icons`;
-// The rl that ships with the mod: the drop folder runs it, and "Install rl" copies it to
-// ~/.local/bin (core/install.js).
+// The rl that ships with the mod (core/helpers.js rlFile): the drop folder runs it, and
+// "Install rl" copies it to ~/.local/bin (core/install.js). Other machines get the POSIX one.
 const RL = `${MOD}/bin/rl`;
 // localStorage: the rl banner state the person dismissed with "Not now", here and (a map
 // machine -> state) for other machines.
@@ -63,8 +68,6 @@ const KEYBOARD = "readlist.keyboard";
 // Bumped when the person turns their handler on or off, so every copy checks it again.
 const HANDLER = "readlist.handler";
 const DOUBLE_MS = 500;
-
-const DIR_SCRIPT = 'd=${READING_LIST_DIR:-$HOME/.local/state/reading-list}; mkdir -p "$d/items" "$d/inbox" && cd "$d" && pwd -P';
 
 const MENU_TITLE = { space: "Space", agent: "Agent", type: "Type", unread: "Show", sources: "Also add", actions: "Actions" };
 const ALL = { space: "All spaces", agent: "All agents", type: "All types" };
@@ -159,11 +162,11 @@ export default class ReadingList extends View {
     this.scroll = VirtualListScrollHandle.new();
     cx.spawn(async (cx) => {
       try {
-        const r = await exec("sh", ["-c", DIR_SCRIPT]);
+        const r = await this.helper("dir");
         if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot create the reading-list folder");
         this.dir = r.stdout.trim();
       } catch (e) {
-        this.error = String(e?.message ?? e);
+        this.error = this.platform === "windows" && noPwsh(String(e?.message ?? e)) ? NEEDS_PWSH : String(e?.message ?? e);
         cx.notify();
         return;
       }
@@ -210,10 +213,28 @@ export default class ReadingList extends View {
     return props()?.role ?? null;
   }
 
+  // The mod's folder, absolute, in this platform's form.
+  modDir() {
+    return joinPath(appHome(), MOD);
+  }
+
+  // Runs helper `op` (core/helpers.js) with `args`: here, or with `on` on another machine
+  // (always an sh script there). Resolves with exec's result.
+  helper(op, args = [], options = undefined) {
+    const on = options?.on ?? null;
+    const c = helperCall(on ? "posix" : this.platform, this.modDir(), op, args);
+    return options === undefined ? exec(c.command, c.args) : exec(c.command, c.args, options);
+  }
+
+  // A file in the list folder.
+  file(name) {
+    return joinPath(this.dir, name);
+  }
+
   // Whether rl is installed and on PATH here, for the banner (core/install.js).
   checkRl(cx) {
     cx.spawn(async (cx) => {
-      const r = await exec("sh", ["-c", RL_STATUS_SCRIPT]).catch(() => null);
+      const r = await this.helper("rl-status").catch(() => null);
       const status = parseRlStatus(r?.stdout);
       if (status.state === this.rl?.state && status.path === this.rl?.path) return;
       this.rl = status;
@@ -222,7 +243,8 @@ export default class ReadingList extends View {
   }
 
   // "Install rl" (the banner's button, readlist.install-rl): copies the mod's rl to
-  // ~/.local/bin here, or on `machine`, never over another program, and says how it went.
+  // ~/.local/bin here (on Windows also putting that folder on the person's PATH, as the
+  // banner says), or on `machine`, never over another program, and says how it went.
   // `installing` is the machine being installed on ("" here), or null.
   installRl(cx, machine = null) {
     if (this.installing != null) return;
@@ -232,13 +254,13 @@ export default class ReadingList extends View {
       let r;
       if (machine) {
         // The file is here: its text goes to the other machine as an argument.
-        const text = await readTextFile(`${appHome()}/${RL}`).catch(() => null);
+        const text = await readTextFile(joinPath(appHome(), RL)).catch(() => null);
         r = text
           ? await exec("sh", ["-c", INSTALL_RL_TEXT_SCRIPT, "readlist", text], { on: machine }).catch(failed)
           : { stdout: "error\tthe mod's rl is missing", stderr: "" };
-      } else r = await exec("sh", ["-c", INSTALL_RL_SCRIPT, "readlist", `${appHome()}/${RL}`]).catch(failed);
+      } else r = await this.helper("install-rl", [rlSource(this.platform, this.modDir())]).catch(failed);
       this.installing = null;
-      notify({ title: "Reading list", ...installToast(r.stdout || r.stderr, machine) });
+      notify({ title: "Reading list", ...installToast(r.stdout || r.stderr, machine, this.platform) });
       if (machine) this.poll(machine, cx);
       else this.checkRl(cx);
       cx.notify();
@@ -295,7 +317,7 @@ export default class ReadingList extends View {
     if (shared(KEYBOARD)?.copy === this.copy) setShared(KEYBOARD, props()?.menu ? this.before : null);
   }
 
-  // The cmd-shift-i (ctrl-shift-i on Linux) popup (an overlay that is not a filter menu).
+  // The cmd-shift-i (ctrl-shift-i on Linux and Windows) popup (an overlay that is not a filter menu).
   popup() {
     return Boolean(props()?.overlay) && !props()?.menu;
   }
@@ -326,17 +348,17 @@ export default class ReadingList extends View {
       do {
         this.again = false;
         const [list, stateText] = await Promise.all([
-          exec("sh", ["-c", LIST_SCRIPT, "readlist", `${this.dir}/items`]),
-          readTextFile(`${this.dir}/state.json`),
+          this.helper("list", [this.file("items")]),
+          readTextFile(this.file("state.json")),
         ]);
         const items = parseListing(list.stdout);
         const paths = items.filter((i) => i.path).map((i) => i.path);
         let st = { fs: {}, mt: {} };
-        if (paths.length) st = parseStats((await exec("sh", ["-c", STATS_SCRIPT, "readlist", ...paths])).stdout, paths);
+        if (paths.length) st = parseStats((await this.helper("stats", paths)).stdout, paths);
         const ids = items.map((i) => i.id).sort().join(" ");
         if (ids !== this.ids) {
           this.ids = ids;
-          exec("sh", ["-c", PRUNE_SCRIPT, "readlist", `${appHome()}/${CACHE}`, ...items.map((i) => i.id)]).catch(() => {});
+          this.helper("prune", [joinPath(appHome(), CACHE), ...items.map((i) => i.id)]).catch(() => {});
         }
         this.local = onMachine(items, null);
         this.localSt = st;
@@ -414,7 +436,7 @@ export default class ReadingList extends View {
       const ids = items.map((i) => i.id).sort().join(" ");
       if (ids !== this.remoteIds?.get(name)) {
         (this.remoteIds ??= new Map()).set(name, ids);
-        exec("sh", ["-c", PRUNE_COPIES_SCRIPT, "readlist", `${appHome()}/${REMOTE_CACHE}/remote/${safeName(name)}`, ...items.map((i) => i.id)]).catch(() => {});
+        this.helper("prune-copies", [joinPath(appHome(), `${REMOTE_CACHE}/remote/${safeName(name)}`), ...items.map((i) => i.id)]).catch(() => {});
       }
       this.seedFetched(items, cx);
       if (!again && unstated(entry).length) this.poll(name, cx, true);
@@ -450,14 +472,14 @@ export default class ReadingList extends View {
 
   // The file's stat on its machine: { kind, mtime, size }. Rejects when it doesn't answer.
   async statOn(item) {
-    const r = await exec("sh", ["-c", STAT1_SCRIPT, "readlist", item.path], { on: item.machine ?? null, timeout: POLL_TIMEOUT_MS });
+    const r = await this.helper("stat1", [item.path], { on: item.machine ?? null, timeout: POLL_TIMEOUT_MS });
     if (r.code !== 0) throw new Error(r.stderr.trim() || `stat exited ${r.code}`);
     return parseStat(r.stdout);
   }
 
   copyMeta(item) {
     const p = copyPaths(item.machine, item.id, item.path);
-    return readTextFile(`${appHome()}/${REMOTE_CACHE}/${p.meta}`).then(parseMeta, () => null);
+    return readTextFile(joinPath(appHome(), `${REMOTE_CACHE}/${p.meta}`)).then(parseMeta, () => null);
   }
 
   // The machine's ssh target (hc machine ls), for scp; null if unknown.
@@ -478,9 +500,9 @@ export default class ReadingList extends View {
   fetchCopy(item, st, loud = false) {
     const key = itemKey(item);
     if (this.fetching.has(key)) return this.fetching.get(key);
-    const root = `${appHome()}/${REMOTE_CACHE}`;
+    const root = joinPath(appHome(), REMOTE_CACHE);
     const p = copyPaths(item.machine, item.id, item.path);
-    const out = `${root}/${p.copy}`, meta = `${root}/${p.meta}`;
+    const out = joinPath(root, p.copy), meta = joinPath(root, p.meta);
     const job = (async () => {
       const had = await this.copyMeta(item);
       if (!isStale(had, st)) {
@@ -492,15 +514,15 @@ export default class ReadingList extends View {
       if (fetchRoute(st.size) === "base64") {
         const b = await exec("sh", ["-c", BASE64_SCRIPT, "readlist", item.path], { on: item.machine, timeout: 120000 });
         if (b.code !== 0) throw new Error(b.stderr.trim() || `base64 exited ${b.code}`);
-        const mk = await exec("mkdir", ["-p", `${root}/${p.dir}`]);
+        const mk = await this.helper("mkdir", [joinPath(root, p.dir)]);
         if (mk.code !== 0) throw new Error(mk.stderr.trim() || "cannot make the cache folder");
-        const tmp = `${root}/${p.dir}/.b64.${Math.random().toString(36).slice(2)}`;
+        const tmp = joinPath(root, `${p.dir}/.b64.${Math.random().toString(36).slice(2)}`);
         await writeTextFile(tmp, b.stdout, null);
-        r = await exec("sh", ["-c", DECODE_SCRIPT, "readlist", tmp, out, ...args]);
+        r = await this.helper("decode", [tmp, out, ...args]);
       } else {
         if (loud) notify({ title: "Reading list", body: `Fetching ${item.title} (${sizeLabel(st.size)}) from ${item.machine}…`, level: "info", timeout: 4000 });
         const target = (await this.sshTarget(item.machine)) ?? "";
-        r = await exec("sh", ["-c", CHUNKS_SCRIPT, "readlist", item.machine, item.path, out, args[0], args[1], meta, target], { timeout: 600000 });
+        r = await this.helper("chunks", [item.machine, item.path, out, args[0], args[1], meta, target], { timeout: 600000 });
       }
       if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
       this.fetched.set(key, (await this.copyMeta(item))?.at ?? Date.now());
@@ -608,9 +630,9 @@ export default class ReadingList extends View {
     try {
       do {
         this.inboxAgain = false;
-        const r = await exec("sh", ["-c", INBOX_SCRIPT, "readlist", `${this.dir}/inbox`]);
+        const r = await this.helper("inbox", [this.file("inbox")]);
         const entries = parseInbox(r.stdout);
-        const path = `${this.dir}/state.json`;
+        const path = this.file("state.json");
         let todo = [];
         let wait = false;
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -627,7 +649,7 @@ export default class ReadingList extends View {
             // Another copy wrote first: read again (it may have taken these entries).
           }
         }
-        if (todo.length) await this.add(todo.map((e) => `${this.dir}/inbox/${e.name}`), "inbox");
+        if (todo.length) await this.add(todo.map((e) => joinPath(this.dir, "inbox", e.name)), "inbox");
         if (wait && !this.settleTimer) this.settleTimer = cx.timer.after(1500, (cx) => { this.settleTimer = null; this.takeInbox(cx); });
       } while (this.inboxAgain);
     } catch (e) {
@@ -639,7 +661,7 @@ export default class ReadingList extends View {
 
   // Runs rl add on `paths`; returns the ids it printed.
   async add(paths, from) {
-    const r = await exec("sh", ["-c", ADD_SCRIPT, "readlist", `${appHome()}/${RL}`, from, ...paths]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+    const r = await this.helper("add", [rlFile(this.platform, this.modDir()), from, ...paths]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
     if (r.code !== 0) notify({ title: "Reading list", body: `Couldn't add to the list: ${r.stderr.trim()}`, level: "error" });
     return r.stdout.split("\n").map((l) => l.trim()).filter((l) => /^[0-9a-f]{16}$/.test(l));
   }
@@ -680,7 +702,7 @@ export default class ReadingList extends View {
       if (pids[n]) args.push(a.address, String(pids[n]), this.sentCache.get(a.address)?.sig ?? "");
     });
     if (!args.length) return;
-    const r = await exec("sh", ["-c", SCAN_SCRIPT, "readlist", "", ...args]);
+    const r = await this.helper("scan", ["", ...args]);
     const scan = [];
     for (const s of parseScan(r.stdout)) {
       const had = this.sentCache.get(s.address);
@@ -694,7 +716,7 @@ export default class ReadingList extends View {
       this.sentCache.set(s.address, { sig: s.sig, session: s.session, sends });
       scan.push({ ...s, sends });
     }
-    const path = `${this.dir}/state.json`;
+    const path = this.file("state.json");
     let todo = [];
     for (let attempt = 0; attempt < 5; attempt++) {
       const text = await readTextFile(path);
@@ -710,14 +732,14 @@ export default class ReadingList extends View {
       }
     }
     if (!todo.length) return;
-    const a = await exec("sh", ["-c", SENT_ADD_SCRIPT, "readlist", `${appHome()}/${RL}`, ...sentAddArgs(todo)]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+    const a = await this.helper("sent-add", [rlFile(this.platform, this.modDir()), ...sentAddArgs(todo)]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
     if (a.code !== 0) notify({ title: "Reading list", body: `Couldn't add a file Claude Code sent: ${a.stderr.trim()}`, level: "warning" });
   }
 
   // The f menu's "Files Claude Code sends" (readlist.claude-files): turns the source on or off.
   toggleSent(cx) {
     if (!this.dir) return;
-    const path = `${this.dir}/state.json`;
+    const path = this.file("state.json");
     cx.spawn(async (cx) => {
       for (let attempt = 0; attempt < 5; attempt++) {
         const text = await readTextFile(path);
@@ -765,7 +787,7 @@ export default class ReadingList extends View {
   mark(id, action, cx, mtime) {
     this.state = applyAction(this.state, id, action, nowIso(), mtime);
     cx.notify();
-    const path = `${this.dir}/state.json`;
+    const path = this.file("state.json");
     return new Promise((resolve) => cx.spawn(async (cx) => {
       try {
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -806,7 +828,7 @@ export default class ReadingList extends View {
       return true;
     }
     if (item.path) {
-      const r = await exec("sh", ["-c", STATS_SCRIPT, "readlist", item.path]).catch(() => null);
+      const r = await this.helper("stats", [item.path]).catch(() => null);
       const st = parseStats(r?.stdout ?? "", [item.path]);
       kind = st.fs[item.path];
       mtime = st.mt[item.path];
@@ -848,18 +870,18 @@ export default class ReadingList extends View {
   // ---- action handlers (core/handlers.js) ----
 
   trustPath() {
-    return `${appHome()}/${TRUST_FILE}`;
+    return joinPath(appHome(), TRUST_FILE);
   }
 
   handlerPath() {
-    return `${appHome()}/${USER_HANDLER}`;
+    return joinPath(appHome(), userHandler(this.platform));
   }
 
   // The handlers to try now, first to last: the person's while trust.json says it is on
   // (bin/run-handler refuses it unless it is still the file they turned on), then the
   // platform's built-in one.
   async handlers() {
-    const trust = parseTrust(await readTextFile(this.trustPath()).catch(() => null));
+    const trust = parseTrust(await readTextFile(this.trustPath()).catch(() => null), this.platform);
     return chain(this.platform, appHome(), trust, MOD);
   }
 
@@ -873,6 +895,7 @@ export default class ReadingList extends View {
       exec: (command, args) => exec(command, args, { timeout: TIMEOUT_MS }),
       extra,
       only,
+      platform: this.platform,
       // The built-in handler said it has no preview window here (no Sushi): not asked again.
       skip: (h) => action === "preview" && h.who === "builtin" && Boolean(this.noLook),
       onRefused: (message) => this.refused(message, cx),
@@ -896,11 +919,12 @@ export default class ReadingList extends View {
   // Which handler the list uses (this.hs), for the banner, the menu and the key hints.
   checkHandler(cx) {
     cx.spawn(async (cx) => {
-      const trust = parseTrust(await readTextFile(this.trustPath()).catch(() => null));
+      const trust = parseTrust(await readTextFile(this.trustPath()).catch(() => null), this.platform);
       let check = null;
       if (trust) {
-        const r = await exec("sh", [`${appHome()}/${MOD}/${RUNNER}`, "check", this.handlerPath()], { timeout: TIMEOUT_MS }).catch(() => null);
-        check = r?.code === 0 ? parseCheck(r.stdout) : { state: "refused", why: "it could not be checked" };
+        const c = checkCall(this.platform, appHome(), MOD);
+        const r = await exec(c.command, c.args, { timeout: TIMEOUT_MS }).catch(() => null);
+        check = r?.code === 0 ? parseCheck(r.stdout, this.platform) : { state: "refused", why: "it could not be checked" };
       }
       const hs = handlerState(trust, check);
       if (JSON.stringify(hs) === JSON.stringify(this.hs)) return;
@@ -924,9 +948,10 @@ export default class ReadingList extends View {
       try {
         const path = this.trustPath();
         const text = await readTextFile(path).catch(() => null);
-        const trust = parseTrust(text);
-        const r = await exec("sh", [`${appHome()}/${MOD}/${RUNNER}`, "check", this.handlerPath()], { timeout: TIMEOUT_MS }).catch(() => null);
-        const check = r?.code === 0 ? parseCheck(r.stdout) : { state: "refused", why: "it could not be checked" };
+        const trust = parseTrust(text, this.platform);
+        const c = checkCall(this.platform, appHome(), MOD);
+        const r = await exec(c.command, c.args, { timeout: TIMEOUT_MS }).catch(() => null);
+        const check = r?.code === 0 ? parseCheck(r.stdout, this.platform) : { state: "refused", why: "it could not be checked" };
         const hs = handlerState(trust, check);
         const on = want ?? !["on", "missing", "refused"].includes(hs.state);
         if (on && hs.state === "on") return;
@@ -958,8 +983,9 @@ export default class ReadingList extends View {
   }
 
   // Space: a preview window from a handler, a toggle like Finder's: the macOS Quick Look
-  // panel, GNOME Sushi on Linux, or what the person's handler shows. Without one (no Sushi,
-  // Windows, a handler that passes) the in-pane preview instead. Never marks read and never
+  // panel, GNOME Sushi on Linux, the QuickLook app or PowerToys Peek on Windows, or what the
+  // person's handler shows. Without one (none installed, a handler that passes) the in-pane
+  // preview instead. Never marks read and never
   // runs anything (both only draw a preview).
   async preview(item, cx) {
     const list = await this.handlers();
@@ -985,7 +1011,7 @@ export default class ReadingList extends View {
       if (!c) return;
       path = c.path;
     } else {
-      const st = await exec("sh", ["-c", STAT_SCRIPT, "readlist", item.path]).catch(() => null);
+      const st = await this.helper("stat", [item.path]).catch(() => null);
       if (st?.stdout.trim() !== "d" && st?.stdout.trim() !== "f" && st?.stdout.trim() !== "x") {
         notify({ title: "Reading list", body: `${item.title} is gone: ${item.path}`, level: "warning" });
         return;
@@ -1067,13 +1093,13 @@ export default class ReadingList extends View {
       throw e;
     }
     let kind = previewKind(item, st.kind);
-    const run = async (script, args, where = null) => {
-      const r = await exec("sh", ["-c", script, "readlist", ...args], { on: where, timeout: 60000 });
+    const run = async (op, args, where = null) => {
+      const r = await this.helper(op, args, { on: where, timeout: 60000 });
       if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
       return r.stdout;
     };
     if (kind.how === "missing" || kind.how === "url") return { ...base, how: kind.how };
-    if (kind.how === "folder") return { ...base, how: "folder", folder: parseFolder(await run(LIST_DIR_SCRIPT, [item.path], on)) };
+    if (kind.how === "folder") return { ...base, how: "folder", folder: parseFolder(await run("listdir", [item.path], on)) };
     if (kind.how === "markdown" || kind.how === "text") {
       let raw;
       if (on && st.size <= 1024 * 1024) {
@@ -1082,7 +1108,7 @@ export default class ReadingList extends View {
         if (raw === null) return { ...base, how: "missing" };
         if (typeof raw === "string" && raw.length > TEXT_BYTES) raw = raw.slice(0, TEXT_BYTES);
       }
-      if (typeof raw !== "string") raw = await run(HEAD_SCRIPT, [item.path], on);
+      if (typeof raw !== "string") raw = await run("head", [item.path], on);
       const text = previewText(raw, st.size);
       if (text === null) kind = THUMB;
       else if (kind.how === "markdown") return { ...base, how: "markdown", text: stripThreads(text) };
@@ -1099,23 +1125,23 @@ export default class ReadingList extends View {
     const name = cacheName(item.id, st, kind, size, list.find((h) => h.who === "user")?.tag ?? "");
     const failedKey = `${key}|${name}`;
     if (this.thumbFailed.has(failedKey)) return { ...base, ...this.thumbFailed.get(failedKey) };
-    let src = item.path, dir = `${appHome()}/${CACHE}`, rel = CACHE;
+    let src = item.path, dir = joinPath(appHome(), CACHE), rel = CACHE;
     if (on) {
       // Over ASK_BYTES, the copy waits for the person's Enter.
       if (needsAsk(st.size) && isStale(await this.copyMeta(item), st)) return { ...base, how: "big", size: st.size };
       src = await this.fetchCopy(item, st);
       const p = copyPaths(on, item.id, item.path);
-      dir = `${appHome()}/${REMOTE_CACHE}/${p.thumbs}`;
+      dir = joinPath(appHome(), `${REMOTE_CACHE}/${p.thumbs}`);
       rel = `${REMOTE_CACHE}/${p.thumbs}`;
     }
     const image = { ...base, how: "image", src: `${rel}/${name}`, thumb: kind.how === "thumb" };
     if (kind.how === "image") {
-      await run(CACHE_SCRIPT, [src, dir, `${dir}/${name}`, item.id, "copy"]);
+      await run("cache", [src, dir, joinPath(dir, name), item.id, "copy"]);
       return image;
     }
     let result = { how: "icon", type: typeOf(item, st.kind) };
     for (const h of list) {
-      const r = await exec("sh", ["-c", CACHE_SCRIPT, "readlist", src, dir, `${dir}/${name}`, item.id, String(size), h.command, ...h.args], { timeout: (THUMB_SECONDS + 15) * 1000 })
+      const r = await this.helper("cache", [src, dir, joinPath(dir, name), item.id, String(size), h.command, ...h.args], { timeout: (THUMB_SECONDS + 15) * 1000 })
         .catch((e) => ({ code: null, stdout: "", stderr: String(e?.message ?? e) }));
       const o = outcome(r);
       if (o.status === "ok") return image;
@@ -1161,7 +1187,7 @@ export default class ReadingList extends View {
     this.items = this.items.filter((i) => itemKey(i) !== key);
     cx.notify();
     cx.spawn(async (cx) => {
-      const r = await exec("rm", ["-f", "--", itemFile(dir, item.id)], { on: item.machine ?? null }).catch((e) => ({ code: 1, stderr: String(e) }));
+      const r = await this.helper("rm-item", [itemFile(dir, item.id)], { on: item.machine ?? null }).catch((e) => ({ code: 1, stderr: String(e) }));
       if (r.code !== 0) notify({ title: "Reading list", body: `Couldn't remove ${item.title}: ${r.stderr.trim()}`, level: "error" });
       if (item.machine) await this.poll(item.machine, cx);
       else if (r.code !== 0) await this.reload(cx);
@@ -1675,7 +1701,7 @@ export default class ReadingList extends View {
 
     // While rl can't be used from a terminal here, or on another machine that answers: what
     // is wrong, and the Install button. This machine's comes first.
-    const localBanner = !rail && this.rl ? rlBanner(this.rl) : null;
+    const localBanner = !rail && this.rl ? rlBanner(this.rl, this.platform) : null;
     const banner = localBanner && this.rlDismissed() !== this.rl.state ? { ...localBanner, machine: null }
       : !rail ? remoteBanner(this.remote, this.remoteDismissed()) : null;
     const showBanner = Boolean(banner);
@@ -1687,7 +1713,7 @@ export default class ReadingList extends View {
           .bg(t.solid).text_color(t.solid_foreground).font_medium().hover((s) => s.opacity(0.9))
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { this.installRl(cx, banner.machine); cx.notify(); })
-          .tooltip(banner.machine ? `Copy this list's rl to ~/.local/bin on ${banner.machine}` : "Copy this list's rl to ~/.local/bin")
+          .tooltip(banner.machine ? `Copy this list's rl to ~/.local/bin on ${banner.machine}` : this.platform === "windows" ? "Copy this list's rl to ~\\.local\\bin and add that folder to your PATH" : "Copy this list's rl to ~/.local/bin")
           .child(this.installing === (banner.machine ?? "") ? "Installing…" : banner.machine ? `Install rl on ${banner.machine}` : "Install rl")))
         .child(link("rl-not-now", "Not now", false, () => (banner.machine ? this.dismissRemoteRl(banner.machine) : this.dismissRl()))));
 

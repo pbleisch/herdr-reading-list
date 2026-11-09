@@ -19,13 +19,15 @@
 // write recorded a send runs rl for it. rl add --if-new leaves a file already on the list
 // (added with rl, or sent before) as it is.
 
+import { isAbsPath, isWinPath, joinPath } from "./paths.js";
+
 // Sessions not seen for this long are forgotten.
 export const KEEP_MS = 90 * 86400000;
 // A session's `seen` is refreshed at most this often, so a scan with nothing new does not
 // write state.json (which would list the folder again).
 const SEEN_MS = 86400000;
 // Lines longer than this are not a send's result (they are a file someone read, quoted).
-const LINE_MAX = 262144;
+export const LINE_MAX = 262144;
 
 // Whether an agents() entry is Claude Code running on this machine.
 export const isClaudeAgent = (a) => Boolean(a) && !String(a.address ?? "").includes("/") && (a.app === "claude-code" || a.program?.key === "claude");
@@ -87,11 +89,11 @@ export function parseSendLine(line) {
   if (!at || !r || typeof r !== "object" || !Array.isArray(r.attachments) || !Array.isArray(content)) return null;
   const result = content.find((b) => b && b.type === "tool_result" && typeof b.tool_use_id === "string");
   if (!result || result.is_error) return null;
-  const cwd = typeof d.cwd === "string" && d.cwd.startsWith("/") ? d.cwd.replace(/\/+$/, "") : null;
+  const cwd = typeof d.cwd === "string" && d.cwd.startsWith("/") ? d.cwd.replace(/\/+$/, "") : isWinPath(d.cwd) ? d.cwd.replace(/(?<!:)[\\/]+$/, "") : null;
   const files = [];
   for (const a of r.attachments) {
     if (!a || typeof a.path !== "string" || !a.path || !a.file_uuid) continue;
-    const p = a.path.startsWith("/") ? a.path : cwd ? `${cwd}/${a.path}` : null;
+    const p = isAbsPath(a.path) ? a.path : cwd ? joinPath(cwd, a.path) : null;
     if (p && !files.includes(p)) files.push(p);
   }
   if (!files.length) return null;

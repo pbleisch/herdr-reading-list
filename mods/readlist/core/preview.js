@@ -4,6 +4,7 @@
 
 import { typeOf } from "./items.js";
 import { THUMB_SECONDS } from "./handlers.js";
+import { baseName } from "./paths.js";
 
 // Under this width (logical px) the pane is narrow: the preview is hidden until `p`, and
 // shown below the list. At or above it, the list is on the left and the preview on the right.
@@ -20,7 +21,7 @@ const DRAWN = new Set(["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"]);
 const LANG = { mjs: "js", cjs: "js", ts: "js", tsx: "js", jsx: "js", jsonc: "json", yml: "yaml", toml: "yaml", zsh: "bash", sh: "bash", htm: "html", xhtml: "html" };
 
 export const ext = (path) => {
-  const name = (path ?? "").replace(/\/+$/, "").split("/").pop() ?? "";
+  const name = baseName(path);
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 };

@@ -13,19 +13,27 @@ default app when you press Enter.
 |---|---|---|---|---|---|
 | macOS | `open` | Finder (`open -R`) | Quick Look | Quick Look (HTML, PDF, ...) | `cmd-shift-i` |
 | Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | GNOME Sushi, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
-| Windows | coming | | | | |
+| Windows | the default app | Explorer (`explorer /select,`) | the QuickLook app or PowerToys Peek, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
 
 macOS has everything. Linux is supported: opening needs `xdg-open` (xdg-utils), showing in the file
 manager works with any file manager that answers the freedesktop `FileManager1` call (Nautilus,
 Dolphin, Nemo, Caja, Thunar...), and the Space preview window needs GNOME Sushi (the `sushi`
 package). Without Sushi, Space shows or hides the preview in the pane instead and says so once;
 when a program is missing, the list says which one instead of failing quietly. Markdown, text, code,
-images and folders preview in the pane on both. Items on other machines are listed from macOS and
-Linux alike.
+images and folders preview in the pane on all three. Items on other machines are listed from macOS,
+Linux and Windows alike.
+
+Windows is supported with PowerShell 7 (`pwsh`, which Herdr also uses as the default shell there;
+[install it](https://aka.ms/powershell) if `pwsh` is missing): the mod runs its PowerShell scripts
+in `mods/readlist/bin/windows` where macOS and Linux run `sh`, `rl` is `rl.ps1` (with `rl.cmd` for
+cmd.exe and other programs, and an `rl` shim for Git Bash), and the list lives in
+`%LOCALAPPDATA%\reading-list`. Space opens the [QuickLook](https://github.com/QL-Win/QuickLook) app
+or PowerToys Peek when either is installed. A Windows machine is not listed from another machine
+yet (it has no `sh` for the list's scripts there).
 
 Each of these actions is a handler: a small program the list runs with the item. The table is what
-the built-in handlers do (`mods/readlist/handlers/macos.sh` and `linux.sh`); you can put your own
-in front of them, see [Your own handler](#your-own-handler).
+the built-in handlers do (`mods/readlist/handlers/macos.sh`, `linux.sh` and `windows.ps1`); you can
+put your own in front of them, see [Your own handler](#your-own-handler).
 
 ## Install
 
@@ -37,14 +45,16 @@ It reads [RECIPE.md](RECIPE.md) and the files, copies `mods/readlist` into your 
 (`~/.config/herdr-app/mods/readlist`), merges `keys.json` into yours where the key is free, and
 checks the mod. To do it by hand, copy the `mods/readlist` folder there yourself, add the key in
 `keys.json` for your platform to your own `keys.json` (`cmd-shift-i` on macOS, `ctrl-shift-i` on
-Linux), and run `herdr-app check ~/.config/herdr-app/mods/readlist`.
+Linux and Windows), and run `herdr-app check ~/.config/herdr-app/mods/readlist`.
 
 What the mod does on your computer: it runs programs (`sh` scripts, its own `rl`, and on macOS
 `open` and `qlmanage` for Quick Look and thumbnails, on Linux `xdg-open` and `gdbus` for the file
-manager and GNOME Sushi, and only if you turn it on, your own handler), reads the files on the list
+manager and GNOME Sushi, on Windows `pwsh` with its own scripts, `explorer.exe` and QuickLook or
+Peek if installed, and only if you turn it on, your own handler), reads the files on the list
 wherever they are (and, only if
 you turn on "Files Claude Code sends", Claude Code's session files and transcripts), and writes only
-its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin/rl`. On other
+its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin/rl` (on Windows
+`~\.local\bin\rl.ps1`, `rl.cmd` and `rl`, and that folder on your user PATH). On other
 machines Herdr reaches, it reads their list folder and the files on it through Herdr every 15 s,
 copies a file into its `.cache/` when you open or preview it, removes an item file on Shift-D, and
 writes `~/.local/bin/rl` there only when you press Install rl on that machine. It uses no network
@@ -53,7 +63,7 @@ fetch (a URL item opens in your browser).
 
 Then open it:
 
-- `cmd-shift-i` (`ctrl-shift-i` on Linux) opens the list as a popup over the window
+- `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the list as a popup over the window
   (`mod.open:readlist`);
 - `herdr-app do pane.split '{"direction":"right","mod":"readlist"}'` opens it as a pane;
 - or add a block with `{"mod": "readlist", "props": {"role": "sidebar"}}` to your layout, for
@@ -68,6 +78,12 @@ button (also `herdr-app do readlist.install-rl`): it copies `rl` to `~/.local/bi
 hides the banner. The same banner offers **Install rl on devbox** for another machine whose list
 it reads and that has no `rl`, so agents there can add to the list; it installs to
 `~/.local/bin/rl` on that machine.
+
+On Windows the banner says what Install rl does before you press it: it copies `rl.ps1`, `rl.cmd`
+and `rl` from `mods/readlist/bin/windows` to `%USERPROFILE%\.local\bin` and, when that folder is
+not on your PATH, adds it to your own user PATH (nothing else in PATH changes). Terminals and agents
+started before that find `rl` after a restart. `rl` then works from PowerShell, cmd.exe and Git
+Bash.
 
 Agents without `rl` can still add items by writing a small JSON file; see
 [skill/reading-list/SKILL.md](skill/reading-list/SKILL.md).
@@ -115,7 +131,8 @@ rl rm docs/plan.md    # take it off the list
 rl add out/report.html --kind result --if-new   # only if it is not on the list yet
 ```
 
-The list lives in `~/.local/state/reading-list/` (`$READING_LIST_DIR` overrides it): one JSON file
+The list lives in `~/.local/state/reading-list/` (on Windows `%LOCALAPPDATA%\reading-list`;
+`$READING_LIST_DIR` overrides it everywhere): one JSON file
 per item in `items/`, and your read and done state in `state.json`. Adding the same path again
 replaces the item (new note, unread again, moved to the top). Inside a Herdr terminal, `rl` records
 which agent added the item; elsewhere `--from NAME`, or your user name and the calling program.
@@ -134,10 +151,10 @@ In the list:
 |---|---|
 | click, `j` / `k`, arrows, `g` / `G` | select (selecting never opens anything) |
 | Enter, double-click | open in its app; marks it read |
-| Space | Quick Look panel on macOS, GNOME Sushi on Linux (again closes it) |
+| Space | Quick Look panel on macOS, GNOME Sushi on Linux, QuickLook or PowerToys Peek on Windows (again closes it) |
 | `p` | show or hide the preview in the pane |
 | `v` | a preview pane on the right of the window that follows the selection |
-| `o` | show in Finder (the file manager on Linux) |
+| `o` | show in Finder (the file manager on Linux, Explorer on Windows) |
 | `c` | copy the path or URL |
 | `r` | read / unread |
 | `d` | done (Tab shows the Done view, where `d` or `u` brings it back) |
@@ -147,14 +164,15 @@ In the list:
 | Shift-R | list this machine and every other one again now |
 
 Each key is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can bind in
-`keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux) opens the popup.
+`keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the popup.
 
 In a pane 520 px or wider, the selected item's preview shows beside the list: markdown rendered,
 text and code highlighted, images, a folder's entries, and on macOS a Quick Look thumbnail of HTML,
 PDF and anything else Quick Look can draw (on Linux those show their type's icon). Narrower, `p`
 shows it below the list. A read item whose file changed since shows a "changed" chip. Executable
-items (apps, scripts, and on Linux `.desktop` files, AppImages and packages) are shown in the file
-manager, never opened.
+items (apps, scripts, and on Linux `.desktop` files, AppImages and packages; on Windows `.exe`,
+`.bat`, `.cmd`, `.ps1`, `.msi`, `.lnk`, `.vbs`, `.js`, `.hta`, disk images and the like, and any
+type in `PATHEXT`) are shown in the file manager, never opened.
 
 ### Other machines
 
@@ -165,7 +183,7 @@ on that machine; to open, Quick Look or show an image, the file is first fetched
 `.cache/`, and fetched again when it changes there. The row then says "copy from devbox, fetched
 18:42"; edits to the copy stay on your computer. A file over 50 MiB is fetched only when you press Enter
 twice. A machine that stops answering keeps its items, with an "offline" chip, until it answers
-again. Windows machines have no list.
+again. A Windows machine has no list here yet (the list's scripts there need `sh`).
 
 ### Your own handler
 
@@ -175,7 +193,8 @@ falls through to the built-in handler. It is off until you turn it on.
 
 1. Write it at `~/.config/herdr-app/readlist/handler` (outside the mod's folder, so reinstalling the
    mod keeps it), in any language, executable (`chmod 755`), owned by you, and not writable by
-   anyone else.
+   anyone else. On Windows it is a PowerShell script, `readlist\handler.ps1` in the Herdr home,
+   that only you can change (see [Security](#security)).
 2. Turn it on: `f`, then Actions, then **Your handler** (or `herdr-app do readlist.handler`). The
    list checks it and says so; from then on the key hints end with "your handler".
 3. After you edit it, the list stops running it and shows a banner with its path; **Use it** turns
@@ -198,9 +217,10 @@ Exit 0 when done, 10 for "not handled" (the built-in handler runs, then the list
 the browser for a link, the preview in the pane for Space, the type's icon for a thumbnail), and
 anything else for an error: the first line of stderr shows in a toast. The list waits 15 s for an
 action and 30 s for a thumbnail, then stops it, so start long-running programs in the background.
-PATH is an absolute path with its folders resolved; for another machine's item it is the copy
-fetched to this computer. More arguments may come in later versions, so match on the action and
-take the item from the end.
+PATH is an absolute path with its folders resolved (`C:\...` on Windows); for another machine's
+item it is the copy fetched to this computer. More arguments may come in later versions, so match
+on the action and take the item from the end. On Windows the list runs your script with
+`pwsh -File`, which splits an argument such as `-a:b`, so no argument before `--` starts with `-`.
 
 An example that opens markdown in VS Code and leaves everything else to the built-in handler:
 
@@ -219,6 +239,19 @@ esac
 exit 10   # not handled: the built-in handler does it
 ```
 
+The same on Windows:
+
+```powershell
+# readlist\handler.ps1 in the Herdr home
+$action = $args[0]
+$item = $args[-1]   # the item: the last argument
+if ($action -eq 'open' -and $item -match '\.(md|markdown)$') {
+	code $item
+	exit 0
+}
+exit 10   # not handled: the built-in handler does it
+```
+
 ## Security
 
 The reading list shows files that agents, tools and other machines put on it, so nothing on the
@@ -232,7 +265,8 @@ list is trusted to run anything.
   `open`.
 - **Off until you turn it on:** your handler runs only after you turn it on with the `f` menu or
   `readlist.handler`, never because a file exists. Turning it on records its real path and its
-  SHA-256 in `~/.config/herdr-app/readlist/trust.json`. Before each run (`mods/readlist/bin/run-handler`)
+  SHA-256 in `~/.config/herdr-app/readlist/trust.json`. Before each run (`mods/readlist/bin/run-handler`,
+  on Windows `bin/windows/run-handler.ps1`)
   the list checks it again; if the file changed, was replaced, or the location now leads elsewhere,
   it is not run, the banner asks you to confirm it (showing the path), and the built-in handler acts
   meanwhile.
@@ -240,6 +274,14 @@ list is trusted to run anything.
   group or others, or sits below a folder (its own, any above it, or one a link passes through) that
   another user owns or that group or others can write. A link is followed, and its target must pass
   the same checks.
+- **Refused on Windows:** a handler that is not a `.ps1` file, is not owned by you (or by
+  Administrators, which owns what an elevated program writes), or that any other account can write,
+  append to, delete, re-permission or take ownership of: Everyone, Users, Authenticated Users, or
+  any other user or group (SYSTEM, Administrators and TrustedInstaller excepted). Its folder may not
+  let others add, delete or rename entries, and no folder above it, or above a link or junction on
+  the way, may let others write into it, delete from it or change its permissions (creating new
+  folders, which Windows lets every user do at a drive's root, is allowed). The handler runs in a
+  `pwsh` of its own and is stopped, with every program it started, at the time limit.
 - **Trusted:** the mod's own files (`main.js`, `handlers/`, `bin/`), like any installed mod, and your
   handler as you confirmed it. The built-in handlers ship in the mod and are replaced when it is
   reinstalled; do not edit them, write your own handler instead.
@@ -258,13 +300,16 @@ rm -rf ~/.config/herdr-app/mods/readlist
 
 Then remove the `cmd-shift-i` (or `ctrl-shift-i`) line from your `~/.config/herdr-app/keys.json` and any `readlist`
 block from your layouts, and `~/.config/herdr-app/readlist/` if you wrote your own handler. If you installed `rl`, delete `~/.local/bin/rl` (on each machine you
-installed it on). Your list stays in
-`~/.local/state/reading-list/` until you delete that folder too.
+installed it on; on Windows `rl.ps1`, `rl.cmd` and `rl` in `%USERPROFILE%\.local\bin`, and that
+folder from your user PATH if nothing else uses it). Your list stays in
+`~/.local/state/reading-list/` (`%LOCALAPPDATA%\reading-list` on Windows) until you delete that
+folder too.
 
 ## Develop
 
 ```sh
 npm test          # node tests for mods/readlist/core, the handlers and the scripts; rl under sh and dash
+                  # (on Windows: node --test "test/*.test.mjs", which runs the PowerShell scripts)
 bin/install-dev   # copy the mod into Herdr, merge keys, link rl, add the list to a cloned layout
 ```
 
@@ -275,7 +320,9 @@ action, macOS takes the `cmd-` key and Linux the `ctrl-` one), links `~/.local/b
 (optional) clones the shown layout as `<name>-readlist` with the list under Agents in the left
 sidebar (`layout/add-to-sidebar.mjs`) and switches to it; `ctrl-shift-l` switches back.
 `--no-layout` skips the layout step, `--no-link` the link. `bin/rl` is a link to the mod's `rl`.
-CI (`.github/workflows/test.yml`) runs the tests on Linux and macOS.
+CI (`.github/workflows/test.yml`) runs the tests on Linux, macOS and Windows. On Windows the tests
+of the `sh` scripts are skipped and `test/windows.test.mjs` runs `rl.ps1`, the helper, the handler
+runner (with ACLs set by `icacls`) and the built-in handler in its dry-run mode.
 
 [docs/design.md](docs/design.md) has the design. MIT licence; the icons are
 [Lucide](https://lucide.dev) (ISC, see `mods/readlist/icons/LICENSE`).

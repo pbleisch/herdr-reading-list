@@ -70,6 +70,7 @@ Other options and details:
   must start with `http://` or `https://`.
 - `--if-new` adds only if the path or URL is not on the list yet, and otherwise leaves its item as
   it is (for a job that may run more than once).
+- On Windows `rl` takes the same commands from PowerShell, cmd.exe and Git Bash.
 
 If `rl` is not found, the person can install it from the reading list (its Install rl button, or
 `herdr-app do readlist.install-rl`). Do not install it yourself; use the fallback below.
@@ -77,7 +78,8 @@ If `rl` is not found, the person can install it from the reading list (its Insta
 ## Without rl
 
 Write one JSON file per item into `$READING_LIST_DIR/items/` (default
-`~/.local/state/reading-list/items/`, create it if missing). Write it under a temporary name that
+`~/.local/state/reading-list/items/`, on Windows `%LOCALAPPDATA%\reading-list\items\`; create it
+if missing). Write it under a temporary name that
 starts with a dot, then rename it to `<id>.json`, so the list never reads half a file.
 
 ```json
@@ -100,7 +102,9 @@ starts with a dot, then rename it to `<id>.json`, so the list never reads half a
 
 - `id` is the first 16 hex characters of the SHA-256 of the real absolute path (or of the URL):
   `printf '%s' "$path" | shasum -a 256 | cut -c1-16`. Using the same id for the same file is what
-  makes a second add replace the first.
+  makes a second add replace the first. On Windows the path is written as `rl` writes it
+  (`C:\Users\me\plan.md`: drive letter upper case, each name as it is on disk), and in PowerShell
+  the id is `[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($path))).ToLower().Substring(0, 16)`.
 - Exactly one of `path` (absolute) and `url` (`http(s)://`) is set; the other is `null`.
 - `added_at` is the time now in UTC; `v` is `1`; `kind` is `review`, `fyi` or `result`.
 - `by.from` names you, as `--from` would.

@@ -9,7 +9,7 @@ other machines Herdr reaches add to that machine's own list, which shows here to
 are previewed in place or fetched into a local copy to open. When the person turns it on, files
 Claude Code agents send them with their SendUserFile tool arrive on the list too, without the agent
 running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shift-i`
-(`ctrl-shift-i` on Linux).
+(`ctrl-shift-i` on Linux and Windows).
 `skill/reading-list/SKILL.md` is an agent skill that teaches agents when and how to add.
 
 ![Reading list](preview.png)
@@ -18,11 +18,11 @@ running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shi
 |---|---|
 | macOS | Full: `open`, Finder (`open -R`), the Quick Look panel and thumbnails (`qlmanage`). |
 | Linux | Supported: `xdg-open`, the file manager through the freedesktop `FileManager1` D-Bus call (`gdbus`), else `xdg-open` on the folder; the Space preview window needs GNOME Sushi, else the in-pane preview; no thumbnails (other types show their icon). |
-| Windows | Coming. |
+| Windows | Supported, with PowerShell 7 (`pwsh`): the default app (the shell's association), Explorer (`explorer /select,`), the Space preview window in the QuickLook app or PowerToys Peek when installed, else the in-pane preview; images drawn in the pane, other types show their icon. `rl` is `rl.ps1` (with `rl.cmd` and a Git Bash shim); the list lives in `%LOCALAPPDATA%\reading-list`. |
 
 Each action (open, reveal, the Space preview window, thumbnails) is a handler, a program run with
 the item as a separate argument: one built in per platform, and in front of it, only once the
-person turns it on, their own `~/.config/herdr-app/readlist/handler`.
+person turns it on, their own `~/.config/herdr-app/readlist/handler` (`handler.ps1` on Windows).
 
 ## What you see
 
@@ -39,7 +39,9 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   side margin, 8 radius, `raised` fill, 1px `border`, 12 text): "Agents add to this list with rl,
   which is not installed." with an **Install rl** button (24 high, `solid` fill, `solid_foreground`
   medium text) and a "Not now" link. Other states: "The rl on your PATH (…) is another program."
-  (with the button), "rl is in ~/.local/bin, which is not on your PATH…" (no button). When `rl`
+  (with the button), "rl is in ~/.local/bin, which is not on your PATH…" (no button). On Windows
+  each text ends "Install rl copies it to ~\.local\bin and adds that folder to your PATH.", and the
+  off-PATH state has the button too (it adds the folder to PATH). When `rl`
   is fine here, the same box speaks for the first other machine without it: "rl is not installed
   on devbox, so agents there cannot add to this list." with **Install rl on devbox**.
 - **List** (rows 46 high, 8 radius, 8 side padding; group heads 30 high): unread items first,
@@ -141,11 +143,28 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   once, and a banner under the header (styled like the rl banner) gives the path with **Use it**
   (confirm the file as it is now, for changed or moved) and "Turn off". While it is on and used, the
   key hints end with "your handler" (`accent`, right-aligned).
+  On Windows the runner is `bin/windows/run-handler.ps1` (pwsh), the built-in handler
+  `handlers/windows.ps1` (`Process.Start` with the shell's association, `explorer.exe
+  /select,"PATH"`, `QuickLook.exe PATH` or `PowerToys.Peek.UI.exe PATH` with the token `quicklook`
+  or `peek`, QuickLook run again on `same` to close it; open refuses the types that could run and
+  any type in `PATHEXT`; `READLIST_DRY_RUN=1` prints `would: ...` instead), and the person's handler
+  is `readlist\handler.ps1`, run in a pwsh of its own and stopped with everything it started after
+  12 s (28 s for a thumbnail). It is refused unless it is a `.ps1` file owned by the person (or
+  Administrators, or SYSTEM) that no other account (Everyone, Users, Authenticated Users, any user
+  or group but the person, SYSTEM, Administrators, TrustedInstaller) may write, append to, delete,
+  re-permission or take; its folder must not let others add, delete or rename entries, and no
+  folder above it (or above a link or junction on the way) may let others write into it, delete
+  from it or change it (creating new folders, which Windows lets every user do at a drive's root,
+  is fine).
 - **Install rl**: the button (or `readlist.install-rl`) copies the mod's `bin/rl` to
   `~/.local/bin/rl` and toasts the result: installed, updated an older copy, already this version,
   `~/.local/bin` not on PATH, another `rl` first on PATH, or "another program called rl; left as it
   is". It never overwrites another program or a link. "Not now" hides the banner in that copy until
-  the state changes. The status is checked on start and every 30 s.
+  the state changes. The status is checked on start and every 30 s. On Windows it copies `rl.ps1`,
+  `rl.cmd` and `rl` (the Git Bash shim) from `bin/windows` to `~\.local\bin` and, when that folder
+  is not on PATH, appends `%USERPROFILE%\.local\bin` to the person's own PATH (HKCU\Environment,
+  the other entries kept unexpanded) and tells running programs; the toast says programs started
+  before then find `rl` after a restart. The status reads PATH afresh from the registry.
 - **Times** refresh every 30 s, when files are also re-checked for the "changed" chip.
 - **Other machines** (each named machine in `machines()` whose layout is ready): listed every 15 s
   while a copy of the mod is alive, and on Shift-R, with one `exec(..., {on})` per machine that
@@ -162,7 +181,8 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   checked either way. Over 50 MiB, Enter (or Space, `o`) says the size and fetches on a second
   press within 15 s; the preview says so instead of fetching. A machine that stops answering keeps
   its items, marked offline, until it answers again; state for its items is not pruned meanwhile.
-  A machine without `sh` (Windows) has no list and is not polled again until it reconnects.
+  Another machine without `sh` (Windows, as another machine) has no list here and is not polled
+  again until it reconnects.
   Shift-D removes the item file on its machine. **Install rl on devbox** sends the mod's `rl` as
   an argument and installs it to `~/.local/bin` there, with the same rules as here.
 
@@ -181,6 +201,13 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   (temp file, `mv`); id = first 16 hex of SHA-256 of the real path or URL; fills `by` from
   `hc get $HC_TERMINAL_ID --json` inside a Herdr terminal. `--if-new` leaves an item already on the
   list as it is.
+- `mods/readlist/bin/windows/`: Windows (PowerShell 7). `rl.ps1` is the same producer (same
+  commands, item JSON byte for byte, id rule; the real path has the drive letter upper case, each
+  name as on disk and links and junctions resolved, e.g. `C:\Users\me\plan.md`; default list folder
+  `%LOCALAPPDATA%\reading-list`), `rl.cmd` runs it from cmd.exe and other programs, `rl` from Git
+  Bash. `readlist.ps1` is one script whose operations stand for the `sh` scripts in `core/*.js`
+  (`core/helpers.js` maps each; same arguments and output shapes). `run-handler.ps1` checks and
+  runs handlers; `common.ps1` is shared by the last two.
 - `skill/reading-list/SKILL.md`: the agent skill (frontmatter `name` and `description`): when to
   add (deliverables, reports, results, decisions; not routine progress), the kinds, a useful note,
   `--from`, and the no-install JSON fallback.
@@ -192,7 +219,8 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   `mods/readlist/bin/run-handler`: checks the person's handler and runs any handler with the item
   as one argument; `core/handlers.js`: the interface, the order handlers are tried in, the
   opt-in record.
-- `herdr`: `exec` (`sh -c` scripts and `sh` files with arguments, with a `timeout`; with `on` for
+- `herdr`: `exec` (`sh -c` scripts and `sh` files with arguments, on Windows `pwsh -File` with
+  arguments, with a `timeout`; with `on` for
   other machines), `window` (`platform`: `macos`, `linux` or `windows`; `core/handlers.js` picks
   the built-in handler from it), `hc` (`machine ls`, for `scp`'s target), `machines`, `readTextFile`,
   `writeTextFile`, `watchFolder`, `nextCommand`, `agents`, `spaces`, `panes`, `focused`, `theme`,
@@ -208,7 +236,10 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   (only the Quick Look panel or thumbnail it started), `base64`, `hc`, `scp` and `shasum` (through
   `rl`), `id`, `find`, `readlink`, `sha256sum` or `shasum`, `od` (handlers), and the person's own
   handler once they turn it on; on other machines, through Herdr, `sh`, `cat`, `stat`, `head`, `ls`, `base64`, `dd`, `rm`
-  and `cp`/`mv` (installing `rl`). No network beyond Herdr's own connections and `scp`.
+  and `cp`/`mv` (installing `rl`). On Windows, here: `pwsh` (its scripts in `bin/windows` and
+  `handlers/windows.ps1`), `explorer.exe`, `QuickLook.exe` or `PowerToys.Peek.UI.exe` when
+  installed, `hc`, `scp`, and the person's handler once they turn it on. No network beyond Herdr's
+  own connections and `scp`.
 
 ## Watch out
 
@@ -235,6 +266,16 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - Pick commands by `window().platform`, and keep each Linux program optional: check with
   `command -v` and print what to install. Text previews read the first 512 KiB; folders show
   200 entries.
+- Windows has no `sh`: every helper there is an operation of `bin/windows/readlist.ps1`, run as
+  `pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File SCRIPT OP ARG...`, never
+  `-Command` (which joins its arguments into code). `pwsh -File` splits an argument like `-x:1` in
+  `$args`, so the scripts read their arguments from `[Environment]::GetCommandLineArgs()` after
+  `-File <script>`; a handler's arguments before `--` never start with `-`. Inside PowerShell, a
+  literal `--` in a command is the end-of-parameters marker and vanishes: pass it in a splatted
+  array. Write stdout as UTF-8 bytes with LF (the console's code page is not UTF-8), and give rl's
+  item files LF too. A file name cannot hold `:` (it names an alternate data stream): paths with
+  one are refused. Temporary folders may be 8.3 short names (`RUNNER~1`): resolve names with Win32
+  matching. Files an elevated program makes are owned by Administrators.
 - `xdg-open` may keep running as long as the app it started: run it in the background with its
   output in a file, wait up to 3 s for its exit status, and return; else `exec`'s 30 s limit kills
   the app with it.
@@ -269,14 +310,19 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   selection and the preview follows; Enter opens the file in its app and the item moves under
   "Read".
 - `d` moves it to the Done view (Tab), and `d` there brings it back; `rl ls --done` agrees.
-- `cmd-shift-i` (`ctrl-shift-i` on Linux) opens the popup; Esc closes it.
+- `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the popup; Esc closes it.
 - With no `rl` on PATH the banner shows; Install rl puts `~/.local/bin/rl` in place (mode 755) and
   says so; with a different file already at `~/.local/bin/rl` it leaves it and says so.
 - A file copied into `~/.local/state/reading-list/inbox/` appears as an item from "inbox".
 - With no handler turned on, Enter, Space and `o` do what the platform table says. A handler at
   `~/.config/herdr-app/readlist/handler` that opens `.md` files and exits 10 otherwise, turned on
   from the `f` menu, opens a markdown item its way and anything else as before; editing the handler
-  shows the banner and the built-in action runs until **Use it**; `chmod g+w` on it is refused.
+  shows the banner and the built-in action runs until **Use it**; `chmod g+w` on it is refused (on
+  Windows: `readlist\handler.ps1`; `icacls handler.ps1 /grant *S-1-5-32-545:(W)` is refused).
+- On Windows: `rl add`, `rl ls`, `rl done`, `rl rm` work from PowerShell, cmd.exe and Git Bash,
+  and an item file made on macOS lists and is marked done unchanged but for `done_at`; Enter opens
+  a PDF in its default app, `o` selects it in Explorer, Enter on a `.exe`, `.ps1` or `.lnk` selects
+  it in Explorer instead; Space opens QuickLook or Peek when installed, else the in-pane preview.
 - With "Files Claude Code sends" off, a Claude Code agent's SendUserFile adds nothing. Turned on, a
   file the agent sends next appears as a `result` item with the caption as its note, naming that
   agent; sending a file that is already on the list leaves its item as it is.

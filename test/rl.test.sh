@@ -4,6 +4,13 @@
 
 set -u
 
+# Windows uses the PowerShell rl (bin/windows/rl.ps1), tested in test/windows.test.mjs.
+case $(uname -s 2>/dev/null) in MINGW* | MSYS* | CYGWIN*)
+	echo "rl.test.sh: skipped on Windows, which runs rl.ps1 (test/windows.test.mjs)"
+	exit 0
+	;;
+esac
+
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 RL=$repo/mods/readlist/bin/rl
 scratch=$(mktemp -d) || exit 1

@@ -16,7 +16,7 @@ import {
   isOffline, safeName, copyPaths, parseMeta, isStale, fetchRoute, needsAsk, fetchedLabel, sizeLabel, remoteBanner,
 } from "../mods/readlist/core/remote.js";
 
-const repo = new URL("..", import.meta.url).pathname;
+import { repo, posix } from "./support.mjs";
 const rl = join(repo, "mods/readlist/bin/rl");
 
 let n = 1;
@@ -78,7 +78,7 @@ test("statLine reads kind, mtime and size", () => {
   assert.deepEqual(statLine(undefined), { kind: "-", mtime: null, size: null });
 });
 
-test("POLL_SCRIPT lists a folder in one run, stats paths, and writes nothing", () => {
+test("POLL_SCRIPT lists a folder in one run, stats paths, and writes nothing", posix, () => {
   const home = scratch("poll");
   // No list folder yet: an empty, whole listing, and nothing made.
   let p = parsePoll(sh(POLL_SCRIPT, [], { HOME: home }));
@@ -107,7 +107,7 @@ test("POLL_SCRIPT lists a folder in one run, stats paths, and writes nothing", (
   assert.equal(p.stats[home].kind, "d");
 });
 
-test("STAT1_SCRIPT gives kind, mtime and size", () => {
+test("STAT1_SCRIPT gives kind, mtime and size", posix, () => {
   const home = scratch("stat");
   const f = join(home, "a b.txt");
   writeFileSync(f, "hello");
@@ -266,7 +266,7 @@ test("fetchRoute, needsAsk, fetchedLabel and sizeLabel", () => {
 // A binary file with every byte value, a size that is not a multiple of anything.
 const binary = (size) => Buffer.from(Array.from({ length: size }, (_, i) => (i * 7 + (i >> 8)) % 256));
 
-test("BASE64_SCRIPT then DECODE_SCRIPT make an exact copy and its meta", () => {
+test("BASE64_SCRIPT then DECODE_SCRIPT make an exact copy and its meta", posix, () => {
   const home = scratch("b64");
   const src = join(home, "pic.png");
   const data = binary(70001);
@@ -287,7 +287,7 @@ test("BASE64_SCRIPT then DECODE_SCRIPT make an exact copy and its meta", () => {
   assert.deepEqual(readdirSync(join(cache, p.dir, "copy")), ["pic.png"], "no part file left");
 });
 
-test("DECODE_SCRIPT refuses a copy of the wrong size", () => {
+test("DECODE_SCRIPT refuses a copy of the wrong size", posix, () => {
   const home = scratch("b64bad");
   writeFileSync(join(home, "in"), Buffer.from("abc").toString("base64"));
   assert.throws(() => sh(DECODE_SCRIPT, [join(home, "in"), join(home, "out/x"), "4", "1", join(home, "meta")]), /got 3 of 4 bytes/);
@@ -307,7 +307,7 @@ function fakeTools(home) {
   return `${bin}:/usr/bin:/bin`;
 }
 
-test("CHUNKS_SCRIPT fetches a file in chunks through hc exec", () => {
+test("CHUNKS_SCRIPT fetches a file in chunks through hc exec", posix, () => {
   const home = scratch("chunks");
   const PATH = fakeTools(home);
   const size = CHUNK_MIB * 1048576 * 2 + 12345;
@@ -320,7 +320,7 @@ test("CHUNKS_SCRIPT fetches a file in chunks through hc exec", () => {
   assert.equal(parseMeta(readFileSync(join(home, "cache/meta"), "utf8")).size, size);
 });
 
-test("CHUNKS_SCRIPT falls back to scp, and fails cleanly without it", () => {
+test("CHUNKS_SCRIPT falls back to scp, and fails cleanly without it", posix, () => {
   const home = scratch("scp");
   const PATH = fakeTools(home);
   const data = binary(1000);
@@ -334,7 +334,7 @@ test("CHUNKS_SCRIPT falls back to scp, and fails cleanly without it", () => {
   assert.deepEqual(readdirSync(join(home, "cache2/copy")), [], "no part file left");
 });
 
-test("PRUNE_COPIES_SCRIPT removes the copies of items no longer listed", () => {
+test("PRUNE_COPIES_SCRIPT removes the copies of items no longer listed", posix, () => {
   const home = scratch("prune");
   for (const id of ["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"]) mkdirSync(join(home, id, "copy"), { recursive: true });
   sh(PRUNE_COPIES_SCRIPT, [home, "aaaaaaaaaaaaaaaa"]);
@@ -344,7 +344,7 @@ test("PRUNE_COPIES_SCRIPT removes the copies of items no longer listed", () => {
 
 // ---- rl on another machine ----
 
-test("INSTALL_RL_TEXT_SCRIPT installs rl from its text, and leaves no temporary file", () => {
+test("INSTALL_RL_TEXT_SCRIPT installs rl from its text, and leaves no temporary file", posix, () => {
   const home = scratch("install");
   const tmp = join(home, "tmp");
   mkdirSync(tmp);

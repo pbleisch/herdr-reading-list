@@ -1,6 +1,9 @@
 // Installing rl: the producer command ships inside the mod (bin/rl), and the "Install rl"
-// action copies it to ~/.local/bin on this Mac, or on another machine Herdr reaches. Pure
-// functions and scripts, shared by the mod and the node tests. See docs/design.md 3.1.
+// action copies it to ~/.local/bin on this Mac, or on another machine Herdr reaches. On
+// Windows it copies the Windows rl (bin/windows: rl.ps1, rl.cmd, rl) to ~\.local\bin and adds
+// that folder to the person's PATH (bin/windows/readlist.ps1 install-rl), which the banner
+// says before they press it. Pure functions and scripts, shared by the mod and the node tests.
+// See docs/design.md 3.1.
 
 // A line every copy of this rl carries; tells it from another program called rl.
 export const MARK = "rl: put files and URLs on the person's Herdr reading list.";
@@ -70,7 +73,20 @@ export function parseRlStatus(stdout) {
 
 // The banner over the list while rl cannot be used from a terminal here, or null.
 // { text, button } where button is "install" or null.
-export function rlBanner(status) {
+export function rlBanner(status, platform = "macos") {
+  if (platform === "windows") {
+    const how = "Install rl copies it to ~\\.local\\bin and adds that folder to your PATH.";
+    switch (status?.state) {
+      case "missing":
+        return { text: `Agents add to this list with rl, which is not installed. ${how}`, button: "install" };
+      case "other":
+        return { text: `The rl on your PATH (${status.path}) is another program. ${how}`, button: "install" };
+      case "offpath":
+        return { text: `rl is in ~\\.local\\bin, which is not on your PATH. Install rl adds that folder to your PATH.`, button: "install" };
+      default:
+        return null;
+    }
+  }
   switch (status?.state) {
     case "missing":
       return { text: "Agents add to this list with rl, which is not installed.", button: "install" };
@@ -84,9 +100,11 @@ export function rlBanner(status) {
 }
 
 // INSTALL_RL_SCRIPT's line as the toast to show: { body, level }. `machine` names another
-// machine the script ran on (null: this one).
-export function installToast(stdout, machine = null) {
-  const [result, dest = "", on = "0", first = ""] = (stdout ?? "").trim().split("\t");
+// machine the script ran on (null: this one). On Windows the line has a fifth field: 1 when
+// the install added ~\.local\bin to the person's PATH.
+export function installToast(stdout, machine = null, platform = "macos") {
+  const [result, dest = "", on = "0", first = "", added = "0"] = (stdout ?? "").trim().split("\t");
+  if (platform === "windows" && !machine) return windowsToast(result, dest, on, first, added);
   const at = machine ? `${machine}:${dest}` : dest;
   const there = machine ? ` on ${machine}` : "";
   const where = on === "1" ? "" : machine
@@ -108,5 +126,30 @@ export function installToast(stdout, machine = null) {
       return { body: `Couldn't install rl${there}: ${dest}`, level: "error" };
     default:
       return { body: `Couldn't install rl${there}: ${(stdout ?? "").trim() || "no answer from the install script"}`, level: "error" };
+  }
+}
+
+// installToast on Windows: the install also puts ~\.local\bin on the person's PATH, which
+// programs started before it do not see.
+function windowsToast(result, dest, on, first, added) {
+  const path = added === "1" ? " Added ~\\.local\\bin to your PATH; terminals and agents started before now find rl after a restart." : "";
+  const where = on === "1" ? "" : " ~\\.local\\bin is not on your PATH: add it in Settings, Environment Variables, so agents find rl.";
+  const shadow = on === "1" && first && first !== dest ? ` Another rl comes first on PATH (${first}).` : "";
+  const level = on === "1" && !shadow ? "success" : "warning";
+  switch (result) {
+    case "installed":
+      return { body: `Installed rl at ${dest}.${path}${where}${shadow}`, level };
+    case "updated":
+      return { body: `Updated rl at ${dest} to this version.${path}${where}${shadow}`, level };
+    case "same":
+      return { body: `rl at ${dest} is already this version.${path}${where}${shadow}`, level: level === "success" && !path ? "info" : level };
+    case "other":
+      return { body: `Another program called rl is in ~\\.local\\bin; left as it is. Move it aside and install again.`, level: "warning" };
+    case "link":
+      return { body: `A link to another copy of rl is in ~\\.local\\bin; left as it is.`, level: "warning" };
+    case "error":
+      return { body: `Couldn't install rl: ${dest}`, level: "error" };
+    default:
+      return { body: `Couldn't install rl: ${result || "no answer from the install script"}`, level: "error" };
   }
 }

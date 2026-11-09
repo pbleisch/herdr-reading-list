@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { posix } from "./support.mjs";
 import { execFileSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
@@ -55,7 +56,7 @@ test("cacheName keys the file version and keeps an image's extension", () => {
   assert.equal(cacheName("0123456789abcdef", st, { how: "image", ext: "png" }, 800, "0a1b2c3d4e5f"), "0123456789abcdef-1700000000-42.png");
 });
 
-test("STAT1_SCRIPT and parseStat describe a path", () => {
+test("STAT1_SCRIPT and parseStat describe a path", posix, () => {
   const dir = mkdtempSync(join(tmpdir(), "rl-pv-"));
   writeFileSync(join(dir, "a b.md"), "hello");
   assert.deepEqual({ ...parseStat(sh(STAT1_SCRIPT, join(dir, "a b.md"))), mtime: 0 }, { kind: "f", mtime: 0, size: 5 });
@@ -65,7 +66,7 @@ test("STAT1_SCRIPT and parseStat describe a path", () => {
   assert.deepEqual(parseStat("garbage"), { kind: "-" });
 });
 
-test("previewText reads text, refuses binary, says when it was cut", () => {
+test("previewText reads text, refuses binary, says when it was cut", posix, () => {
   assert.equal(previewText("# hi\n", 5), "# hi\n");
   assert.equal(previewText("a\0b", 3), null);
   assert.match(previewText("abc", TEXT_BYTES + 1), /first 512 KiB of 513 KiB/);
@@ -80,7 +81,7 @@ test("stripThreads drops omd's comment threads", () => {
   assert.equal(stripThreads("plain <!-- other -->"), "plain <!-- other -->");
 });
 
-test("parseFolder lists folders first and caps the entries", () => {
+test("parseFolder lists folders first and caps the entries", posix, () => {
   assert.deepEqual(parseFolder("b.txt\nsub/\na.md\n.hidden\n"), {
     entries: [{ name: "sub", dir: true }, { name: ".hidden", dir: false }, { name: "a.md", dir: false }, { name: "b.txt", dir: false }],
     more: false,
@@ -93,7 +94,7 @@ test("parseFolder lists folders first and caps the entries", () => {
   assert.equal(f.more, true);
 });
 
-test("CACHE_SCRIPT copies an image and replaces the item's older versions", () => {
+test("CACHE_SCRIPT copies an image and replaces the item's older versions", posix, () => {
   const dir = mkdtempSync(join(tmpdir(), "rl-pv-"));
   const cache = join(dir, ".cache", "local");
   const src = join(dir, "shot one.png");
@@ -107,7 +108,7 @@ test("CACHE_SCRIPT copies an image and replaces the item's older versions", () =
   assert.deepEqual(readdirSync(cache), [`${id}-2-3.png`]);
 });
 
-test("CACHE_SCRIPT is safe when two copies of the mod make one image at once", async () => {
+test("CACHE_SCRIPT is safe when two copies of the mod make one image at once", posix, async () => {
   const dir = mkdtempSync(join(tmpdir(), "rl-pv-"));
   const cache = join(dir, ".cache");
   const src = join(dir, "a.png");

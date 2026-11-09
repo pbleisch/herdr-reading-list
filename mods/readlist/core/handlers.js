@@ -1,13 +1,15 @@
 // Action handlers: the programs that open, reveal, preview and thumbnail an item. The mod's
-// built-in ones (handlers/macos.sh, handlers/linux.sh) and, only after the person turns it
-// on, their own program at <app home>/readlist/handler, tried first. bin/run-handler checks
-// the person's handler and runs any handler; these are the pure functions around it, shared
-// by the mod and the node tests. See README "Your own handler" and docs/design.md 4.7.
+// built-in ones (handlers/macos.sh, linux.sh, windows.ps1) and, only after the person turns
+// it on, their own program at <app home>/readlist/handler (handler.ps1 on Windows), tried
+// first. bin/run-handler (bin/windows/run-handler.ps1 on Windows) checks the person's handler
+// and runs any handler; these are the pure functions around it, shared by the mod and the
+// node tests. See README "Your own handler" and docs/design.md 4.7.
 //
 // A handler is called with argv, never through a shell string:
 //   HANDLER ACTION [ARG...] -- ITEM
 // ITEM, the only item data it gets, is always the last argument, right after `--`: an
-// absolute path with its folders resolved (or, for open-url, an http or https URL).
+// absolute path with its folders resolved (C:\... on Windows), or, for open-url, an http or
+// https URL. On Windows no argument before `--` starts with "-" (pwsh -File would split it).
 //   open -- PATH                          open in its app (Enter)
 //   reveal -- PATH                        show in the file manager (o; Enter on a file that could run)
 //   open-url -- URL                       open a link (Enter on a link)
@@ -26,6 +28,8 @@
 // shown in a toast. Each run has a time limit (TIMEOUT_MS, THUMB_SECONDS).
 
 import { platformOf } from "./platform.js";
+import { isLocalPath, joinPath } from "./paths.js";
+import { PWSH, PWSH_ARGS, WIN_RUNNER } from "./windows.js";
 
 export const NOT_HANDLED = 10;
 // The runner refused to run the person's handler (not turned on for this file, changed,
@@ -39,7 +43,12 @@ export const THUMB_SECONDS = 30;
 // folder, so reinstalling the mod keeps them).
 export const USER_DIR = "readlist";
 export const USER_HANDLER = `${USER_DIR}/handler`;
+// On Windows a program needs an extension to run: the person's handler is a PowerShell script.
+export const USER_HANDLER_WINDOWS = `${USER_DIR}/handler.ps1`;
 export const TRUST_FILE = `${USER_DIR}/trust.json`;
+
+// The person's handler's location under the app home on `platform`.
+export const userHandler = (platform) => (platform === "windows" ? USER_HANDLER_WINDOWS : USER_HANDLER);
 // The program that checks the person's handler and runs any handler (bin/run-handler in
 // the mod's folder; run with sh, so a lost execute bit does not matter).
 export const RUNNER = "bin/run-handler";
@@ -47,13 +56,13 @@ export const RUNNER = "bin/run-handler";
 // The built-in handler for a platform, a file in the mod's handlers/ (null: none yet).
 export function builtinFile(platform) {
   const p = platformOf({ platform });
-  return p === "macos" ? "macos.sh" : p === "linux" ? "linux.sh" : null;
+  return p === "macos" ? "macos.sh" : p === "linux" ? "linux.sh" : "windows.ps1";
 }
 
 // The opt-in record (trust.json): { v: 1, handler: { path, sha256, at } | null }. The path
-// is the real path the handler resolved to and sha256 its contents when the person turned
-// it on. Anything else reads as off.
-export function parseTrust(text) {
+// is the real path the handler resolved to (absolute in `platform`'s form) and sha256 its
+// contents when the person turned it on. Anything else reads as off.
+export function parseTrust(text, platform = "macos") {
   let raw = null;
   try {
     raw = text ? JSON.parse(text) : null;
@@ -61,7 +70,7 @@ export function parseTrust(text) {
     return null;
   }
   const h = raw?.v === 1 ? raw.handler : null;
-  if (!h || typeof h.path !== "string" || !h.path.startsWith("/") || !/^[0-9a-f]{64}$/.test(h.sha256 ?? "")) return null;
+  if (!h || !isLocalPath(h.path, platform) || !/^[0-9a-f]{64}$/.test(h.sha256 ?? "")) return null;
   return { path: h.path, sha256: h.sha256, at: typeof h.at === "string" ? h.at : null };
 }
 
@@ -70,24 +79,32 @@ export const serializeTrust = (handler) => JSON.stringify({ v: 1, handler: handl
 // The handlers to try, first to last: { who: "user" | "builtin", command, args, tag? }. The
 // item's kind, the item and the action's argv follow `args`. `home` is the app home, `trust`
 // the opt-in record (the person's handler is tried only with one), `mod` the mod's folder
-// under the home. The person's carries a tag (from its hash) for the thumbnails it makes.
+// under the home. The person's carries a tag (from its hash) for the thumbnails it makes. On
+// Windows both run through bin/windows/run-handler.ps1 with pwsh.
 export function chain(platform, home, trust, mod) {
   const out = [];
+  if (platformOf({ platform }) === "windows") {
+    const run = [...PWSH_ARGS, joinPath(home, mod, WIN_RUNNER)];
+    if (trust) out.push({ who: "user", tag: trust.sha256.slice(0, 12), command: PWSH, args: [...run, "user", joinPath(home, USER_HANDLER_WINDOWS), trust.path, trust.sha256] });
+    out.push({ who: "builtin", command: PWSH, args: [...run, "builtin", joinPath(home, mod, "handlers", builtinFile(platform))] });
+    return out;
+  }
   const run = `${home}/${mod}/${RUNNER}`;
   if (trust) out.push({ who: "user", tag: trust.sha256.slice(0, 12), command: "sh", args: [run, "user", `${home}/${USER_HANDLER}`, trust.path, trust.sha256] });
   const file = builtinFile(platform);
-  if (file) out.push({ who: "builtin", command: "sh", args: [run, "builtin", `${home}/${mod}/handlers/${file}`] });
+  out.push({ who: "builtin", command: "sh", args: [run, "builtin", `${home}/${mod}/handlers/${file}`] });
   return out;
 }
 
 // The argv after a handler's `args` for an action on an item: kind ("path" or "url"), the
 // item, the action and its arguments. null when the item may not go to a handler: a path
-// that is not absolute, a link that is not http or https, a NUL byte anywhere.
-export function actionArgs(action, item, extra = []) {
+// that is not absolute (in `platform`'s form), a link that is not http or https, a NUL byte
+// anywhere; on Windows also an argument starting with "-".
+export function actionArgs(action, item, extra = [], platform = "macos") {
   if (!ACTIONS.includes(action) || typeof item !== "string" || item.includes("\0")) return null;
-  if (extra.some((a) => typeof a !== "string" || a.includes("\0"))) return null;
+  if (extra.some((a) => typeof a !== "string" || a.includes("\0") || (platform === "windows" && a.startsWith("-")))) return null;
   const kind = action === "open-url" ? "url" : "path";
-  if (kind === "url" ? !/^https?:\/\/[^\s]+$/i.test(item) : !item.startsWith("/")) return null;
+  if (kind === "url" ? !/^https?:\/\/[^\s]+$/i.test(item) : !isLocalPath(item, platform)) return null;
   return [kind, item, action, ...extra];
 }
 
@@ -120,11 +137,11 @@ export function outcome(r) {
 // `extra(h)` gives the action's arguments for a handler, `only` limits it to one ("user" or
 // "builtin"), `skip(h)` leaves one out. `onRefused(message)` hears when bin/run-handler
 // would not run the person's handler (the next one runs instead), `onPass(h, message)`
-// when a handler passed.
-export async function runChain(list, action, item, { exec, extra = () => [], only = null, skip = () => false, onRefused = () => {}, onPass = () => {} }) {
+// when a handler passed. `platform` is the one the list runs on.
+export async function runChain(list, action, item, { exec, extra = () => [], only = null, skip = () => false, onRefused = () => {}, onPass = () => {}, platform = "macos" }) {
   for (const h of list) {
     if ((only && h.who !== only) || skip(h)) continue;
-    const args = actionArgs(action, item, extra(h));
+    const args = actionArgs(action, item, extra(h), platform);
     if (!args) return { status: "failed", stdout: "", message: action === "open-url" ? "only http and https links go to a handler" : "not an absolute path", who: h.who };
     const r = await exec(h.command, [...h.args, ...args]).catch((e) => ({ code: null, stdout: "", stderr: String(e?.message ?? e) }));
     const o = outcome(r);
@@ -135,11 +152,17 @@ export async function runChain(list, action, item, { exec, extra = () => [], onl
   return { status: "pass", stdout: "", message: "", who: null };
 }
 
+// The call that checks the person's handler: { command, args } for exec.
+export function checkCall(platform, home, mod) {
+  if (platformOf({ platform }) === "windows") return { command: PWSH, args: [...PWSH_ARGS, joinPath(home, mod, WIN_RUNNER), "check", joinPath(home, USER_HANDLER_WINDOWS)] };
+  return { command: "sh", args: [`${home}/${mod}/${RUNNER}`, "check", `${home}/${USER_HANDLER}`] };
+}
+
 // `run-handler check`'s output: { state: "ok", path, sha256 } | { state: "missing" } |
 // { state: "refused", why }.
-export function parseCheck(stdout) {
+export function parseCheck(stdout, platform = "macos") {
   const [state, a, b] = (stdout ?? "").replace(/\n$/, "").split("\t");
-  if (state === "ok" && a?.startsWith("/") && /^[0-9a-f]{64}$/.test(b ?? "")) return { state: "ok", path: a, sha256: b };
+  if (state === "ok" && isLocalPath(a, platform) && /^[0-9a-f]{64}$/.test(b ?? "")) return { state: "ok", path: a, sha256: b };
   if (state === "missing") return { state: "missing" };
   return { state: "refused", why: a || "it could not be checked" };
 }

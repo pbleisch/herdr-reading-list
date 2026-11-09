@@ -3,6 +3,7 @@
 // against stand-in programs.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { posix, WINDOWS } from "./support.mjs";
 import { spawnSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, symlinkSync, realpathSync, rmSync, readdirSync, appendFileSync } from "node:fs";
@@ -11,7 +12,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   NOT_HANDLED, REFUSED, ACTIONS, RUNNER, USER_HANDLER, TRUST_FILE,
-  builtinFile, chain, actionArgs, runChain, token, shortError, outcome,
+  builtinFile, chain, checkCall, userHandler, actionArgs, runChain, token, shortError, outcome,
   parseTrust, serializeTrust, parseCheck, handlerState, handlerBanner,
 } from "../mods/readlist/core/handlers.js";
 import { CACHE_SCRIPT } from "../mods/readlist/core/preview.js";
@@ -40,7 +41,7 @@ function privateBase() {
   }
   return null;
 }
-const BASE = privateBase();
+const BASE = WINDOWS ? null : privateBase();
 const needsPrivate = BASE ? {} : { skip: "no folder here that only this user can write (the runner would refuse every handler)" };
 after(() => {
   for (const d of scratchRoots) rmSync(d, { recursive: true, force: true });
@@ -89,7 +90,7 @@ test("chain: the built-in handler per platform, the person's first only when tur
   const trust = { path: "/h/readlist/handler", sha256: "a".repeat(64) };
   assert.equal(builtinFile("macos"), "macos.sh");
   assert.equal(builtinFile("linux"), "linux.sh");
-  assert.equal(builtinFile("windows"), null);
+  assert.equal(builtinFile("windows"), "windows.ps1");
   const off = chain("macos", "/h", null, "mods/readlist");
   assert.deepEqual(off, [{ who: "builtin", command: "sh", args: ["/h/mods/readlist/bin/run-handler", "builtin", "/h/mods/readlist/handlers/macos.sh"] }]);
   const on = chain("linux", "/h", trust, "mods/readlist");
@@ -97,8 +98,18 @@ test("chain: the built-in handler per platform, the person's first only when tur
   assert.deepEqual(on[0].args, ["/h/mods/readlist/bin/run-handler", "user", "/h/readlist/handler", trust.path, trust.sha256]);
   assert.equal(on[0].tag, "aaaaaaaaaaaa");
   assert.equal(on[1].args[2], "/h/mods/readlist/handlers/linux.sh");
-  assert.deepEqual(chain("windows", "/h", null, "mods/readlist"), []);
-  assert.deepEqual(chain("windows", "/h", trust, "mods/readlist").map((h) => h.who), ["user"]);
+  // Windows: both through run-handler.ps1 with pwsh -File, every argument its own.
+  const PS = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"];
+  const wtrust = { path: "C:\\h\\readlist\\handler.ps1", sha256: "a".repeat(64) };
+  assert.deepEqual(chain("windows", "C:\\h", null, "mods/readlist"),
+    [{ who: "builtin", command: "pwsh", args: [...PS, "C:\\h\\mods\\readlist\\bin\\windows\\run-handler.ps1", "builtin", "C:\\h\\mods\\readlist\\handlers\\windows.ps1"] }]);
+  const won = chain("windows", "C:\\h", wtrust, "mods/readlist");
+  assert.deepEqual(won.map((h) => [h.who, h.command]), [["user", "pwsh"], ["builtin", "pwsh"]]);
+  assert.deepEqual(won[0].args.slice(PS.length + 1), ["user", "C:\\h\\readlist\\handler.ps1", wtrust.path, wtrust.sha256]);
+  assert.equal(userHandler("windows"), "readlist/handler.ps1");
+  assert.equal(userHandler("macos"), USER_HANDLER);
+  assert.deepEqual(checkCall("macos", "/h", "mods/readlist"), { command: "sh", args: ["/h/mods/readlist/bin/run-handler", "check", "/h/readlist/handler"] });
+  assert.deepEqual(checkCall("windows", "C:\\h", "mods/readlist"), { command: "pwsh", args: [...PS, "C:\\h\\mods\\readlist\\bin\\windows\\run-handler.ps1", "check", "C:\\h\\readlist\\handler.ps1"] });
   assert.equal(USER_HANDLER, "readlist/handler");
   assert.equal(TRUST_FILE, "readlist/trust.json");
 });
@@ -202,7 +213,7 @@ test("opt-in: off unless trust.json names the file and its hash; on/off/changed/
 
 // ---- the runner: checks before the person's handler runs ----
 
-test("run-handler check: a private executable passes, with its real path and hash", needsPrivate, () => {
+test("run-handler check: a private executable passes, with its real path and hash", { ...needsPrivate, ...posix }, () => {
   const h = home();
   const c = check(h.handler);
   assert.equal(c.state, "ok");
@@ -212,7 +223,7 @@ test("run-handler check: a private executable passes, with its real path and has
   assert.deepEqual(check(join(h.dir, "nofolder/handler")), { state: "missing" });
 });
 
-test("run-handler runs the person's handler with argv, the path resolved, nothing interpolated", needsPrivate, () => {
+test("run-handler runs the person's handler with argv, the path resolved, nothing interpolated", { ...needsPrivate, ...posix }, () => {
   const h = home();
   const c = check(h.handler);
   const items = join(h.dir, "items");
@@ -235,7 +246,7 @@ test("run-handler runs the person's handler with argv, the path resolved, nothin
   assert.deepEqual(h.argv(), ["open-url", "--", "https://x.dev/$(id)"]);
 });
 
-test("run-handler refuses a link that is not http(s) and a path that is not absolute", needsPrivate, () => {
+test("run-handler refuses a link that is not http(s) and a path that is not absolute", { ...needsPrivate, ...posix }, () => {
   const h = home();
   const c = check(h.handler);
   for (const [kind, item] of [["url", "javascript:alert(1)"], ["url", "file:///etc/passwd"], ["path", "relative.md"], ["path", "-rf"], ["kind", "/a"]]) {
@@ -245,7 +256,7 @@ test("run-handler refuses a link that is not http(s) and a path that is not abso
   }
 });
 
-test("run-handler refuses the person's handler once it changed, and runs nothing", needsPrivate, () => {
+test("run-handler refuses the person's handler once it changed, and runs nothing", { ...needsPrivate, ...posix }, () => {
   const h = home();
   const c = check(h.handler);
   appendFileSync(h.handler, "echo extra\n");
@@ -257,7 +268,7 @@ test("run-handler refuses the person's handler once it changed, and runs nothing
   assert.equal(handlerState({ path: c.path, sha256: c.sha256 }, check(h.handler)).state, "changed");
 });
 
-test("run-handler refuses when the location now leads to another file", needsPrivate, () => {
+test("run-handler refuses when the location now leads to another file", { ...needsPrivate, ...posix }, () => {
   const h = home();
   const a = join(h.dir, "readlist/a"), b = join(h.dir, "readlist/b");
   writeFileSync(a, readFileSync(h.handler), { mode: 0o755 });
@@ -277,7 +288,7 @@ test("run-handler refuses when the location now leads to another file", needsPri
   assert.ok(!existsSync(h.log));
 });
 
-test("run-handler refuses bad ownership and permissions, and links to such files", needsPrivate, () => {
+test("run-handler refuses bad ownership and permissions, and links to such files", { ...needsPrivate, ...posix }, () => {
   const refused = (path, re) => {
     const c = check(path);
     assert.equal(c.state, "refused", `${path}: ${JSON.stringify(c)}`);
@@ -332,7 +343,7 @@ test("run-handler refuses bad ownership and permissions, and links to such files
   refused(h.handler, /not a regular file/);
 });
 
-test("run-handler runs a built-in handler from the mod with sh, without the person's checks", () => {
+test("run-handler runs a built-in handler from the mod with sh, without the person's checks", posix, () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "rl-h-")));
   const log = join(dir, "log");
   const file = join(dir, "builtin.sh");
@@ -346,7 +357,7 @@ test("run-handler runs a built-in handler from the mod with sh, without the pers
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("a handler that passes falls through to the built-in one, end to end", needsPrivate, async () => {
+test("a handler that passes falls through to the built-in one, end to end", { ...needsPrivate, ...posix }, async () => {
   const h = home('case $1 in reveal) exit 10;; *) printf "%s\\0" "$@" > "$LOG";; esac');
   const c = check(h.handler);
   const blog = join(h.dir, "builtin.log");
@@ -396,7 +407,7 @@ const handler = (file, args, path) => {
   return { ...r, ms: Date.now() - started };
 };
 
-test("macOS: open, open -R and qlmanage exactly as before", () => {
+test("macOS: open, open -R and qlmanage exactly as before", posix, () => {
   const s = stubs({});
   for (const p of ["open", "qlmanage"]) writeFileSync(join(s.bin, p), `#!/bin/sh\necho ${p} >> '${s.log}'\n${logArgs(s.log)}\n`, { mode: 0o755 });
   const path = "/a/b c; $(x).md";
@@ -414,7 +425,7 @@ test("macOS: open, open -R and qlmanage exactly as before", () => {
   assert.equal(handler(MACOS, ["open", path], SYS).status, 2, "no -- separator: refused");
 });
 
-test("macOS: preview-close kills that pid only while it is Quick Look", () => {
+test("macOS: preview-close kills that pid only while it is Quick Look", posix, () => {
   const sleeper = () => spawnSync("sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], { encoding: "utf8" }).stdout.trim();
   const alive = (pid) => spawnSync("kill", ["-0", pid]).status === 0;
   const ql = stubs({ ps: 'echo " /System/Library/Frameworks/QuickLook.framework/Resources/qlmanage"' });
@@ -435,7 +446,7 @@ test("macOS: preview-close kills that pid only while it is Quick Look", () => {
   assert.equal(handler(MACOS, ["preview-close", "", "same", "--", "/a.md"], `${ql.bin}:${SYS}`).status, 1);
 });
 
-test("macOS: thumbnail runs qlmanage -t into its own folder and moves the PNG to OUT", () => {
+test("macOS: thumbnail runs qlmanage -t into its own folder and moves the PNG to OUT", posix, () => {
   const s = stubs({});
   writeFileSync(join(s.bin, "qlmanage"), `#!/bin/sh\n${logArgs(s.log)}\nwhile [ $# -gt 1 ]; do [ "$1" = -o ] && d=$2; shift; done\necho png > "$d/$(basename "$1").png"\n`, { mode: 0o755 });
   const out = join(s.dir, "h");
@@ -449,7 +460,7 @@ test("macOS: thumbnail runs qlmanage -t into its own folder and moves the PNG to
   assert.ok(a[4].startsWith(`${out}/ql.`));
 });
 
-test("macOS: a Quick Look thumbnail that never returns is stopped and says so", () => {
+test("macOS: a Quick Look thumbnail that never returns is stopped and says so", posix, () => {
   const s = stubs({ qlmanage: "exec sleep 600" });
   const fast = join(s.dir, "macos.sh");
   const text = readFileSync(MACOS, "utf8").replace("sleep 20\n", "sleep 1\n");
@@ -465,7 +476,7 @@ test("macOS: a Quick Look thumbnail that never returns is stopped and says so", 
 // A file:// URI the way the Linux branch made it in JavaScript (core/platform.js fileUri).
 const fileUri = (path) => `file://${path.split("/").map((s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join("/")}`;
 
-test("Linux: reveal asks the file manager over D-Bus with the same URI as before", () => {
+test("Linux: reveal asks the file manager over D-Bus with the same URI as before", posix, () => {
   const s = stubs({});
   writeFileSync(join(s.bin, "gdbus"), `#!/bin/sh\n${logArgs(s.log)}\n`, { mode: 0o755 });
   for (const path of ["/a/b c.md", "/home/me/a b/it's (1)!.md", "/x/100%/#?.md", "/x/back\\slash\"q", "/x/héllo", "/x/~a-b_c.d", "/x/\nnew", "/x/$(id)"]) {
@@ -479,7 +490,7 @@ test("Linux: reveal asks the file manager over D-Bus with the same URI as before
   }
 });
 
-test("Linux: reveal falls back to xdg-open on the folder, then says what is missing", () => {
+test("Linux: reveal falls back to xdg-open on the folder, then says what is missing", posix, () => {
   const s = stubs({ gdbus: "exit 1" });
   writeFileSync(join(s.bin, "xdg-open"), `#!/bin/sh\n${logArgs(s.log)}\n`, { mode: 0o755 });
   let r = handler(LINUX, ["reveal", "--", "/a/b c.md"], `${s.bin}:${SYS}`);
@@ -490,7 +501,7 @@ test("Linux: reveal falls back to xdg-open on the folder, then says what is miss
   assert.match(r.stderr, /no file manager answered, and xdg-open is not installed/);
 });
 
-test("Linux: open runs xdg-open with the path as one argument, as before", () => {
+test("Linux: open runs xdg-open with the path as one argument, as before", posix, () => {
   const s = stubs({});
   writeFileSync(join(s.bin, "xdg-open"), `#!/bin/sh\nprintf '%s\\n' "$#" "$1" > '${s.log}'\n`, { mode: 0o755 });
   const r = handler(LINUX, ["open", "--", "/a/b c; rm -rf x.md"], `${s.bin}:${SYS}`);
@@ -498,7 +509,7 @@ test("Linux: open runs xdg-open with the path as one argument, as before", () =>
   assert.equal(readFileSync(s.log, "utf8"), "1\n/a/b c; rm -rf x.md\n");
 });
 
-test("Linux: open says xdg-open is missing, and passes on its failure and message", () => {
+test("Linux: open says xdg-open is missing, and passes on its failure and message", posix, () => {
   let r = handler(LINUX, ["open", "--", "/a/b.md"], stubs({}).bin);
   assert.equal(r.status, 127);
   assert.match(r.stderr, /xdg-open is not installed \(it comes with xdg-utils\)/);
@@ -512,13 +523,13 @@ test("Linux: open says xdg-open is missing, and passes on its failure and messag
   assert.equal(r.status, 1, "an opener's 10 is not taken as not handled");
 });
 
-test("Linux: open returns while an opener that stays running keeps going", () => {
+test("Linux: open returns while an opener that stays running keeps going", posix, () => {
   const r = handler(LINUX, ["open", "--", "/a/b.md"], `${stubs({ "xdg-open": "sleep 6" }).bin}:${SYS}`);
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.ms < 5500, `took ${r.ms} ms`);
 });
 
-test("Linux: Space shows the file in GNOME Sushi; Space again on it closes it", () => {
+test("Linux: Space shows the file in GNOME Sushi; Space again on it closes it", posix, () => {
   const s = stubs({});
   writeFileSync(join(s.bin, "gdbus"), `#!/bin/sh\n${logArgs(s.log)}\n`, { mode: 0o755 });
   let r = handler(LINUX, ["preview", "--", "/a/b c.md"], `${s.bin}:${SYS}`);
@@ -533,7 +544,7 @@ test("Linux: Space shows the file in GNOME Sushi; Space again on it closes it", 
   assert.equal(s.args().length, before, "another item: Sushi keeps its window for the next file");
 });
 
-test("Linux: Sushi's older interface is tried before giving up", () => {
+test("Linux: Sushi's older interface is tried before giving up", posix, () => {
   const s = stubs({});
   writeFileSync(join(s.bin, "gdbus"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${s.log}'\ncase "$*" in *NautilusPreviewer.ShowFile*) exit 0;; esac\nexit 1\n`, { mode: 0o755 });
   const r = handler(LINUX, ["preview", "--", "/a"], `${s.bin}:${SYS}`);
@@ -541,7 +552,7 @@ test("Linux: Sushi's older interface is tried before giving up", () => {
   assert.match(readFileSync(s.log, "utf8"), /NautilusPreviewer\.ShowFile 'file:\/\/\/a' 0 false/);
 });
 
-test("Linux: no Sushi or no gdbus is not handled, with the reason the toast shows", () => {
+test("Linux: no Sushi or no gdbus is not handled, with the reason the toast shows", posix, () => {
   const none = stubs({ gdbus: "echo 'Error: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown' >&2; exit 1" });
   let r = handler(LINUX, ["preview", "--", "/a"], `${none.bin}:${SYS}`);
   assert.equal(r.status, NOT_HANDLED);
@@ -551,14 +562,14 @@ test("Linux: no Sushi or no gdbus is not handled, with the reason the toast show
   assert.equal(shortError(r.stderr), "Space's preview window needs gdbus and GNOME Sushi");
 });
 
-test("Linux: no thumbnails and no link opener: not handled", () => {
+test("Linux: no thumbnails and no link opener: not handled", posix, () => {
   assert.equal(handler(LINUX, ["thumbnail", "800", "/o/thumb.png", "--", "/a.pdf"], SYS).status, NOT_HANDLED);
   assert.equal(handler(LINUX, ["open-url", "--", "https://x.dev"], SYS).status, NOT_HANDLED);
 });
 
 // ---- thumbnails through CACHE_SCRIPT ----
 
-test("CACHE_SCRIPT asks a handler for a thumbnail: made, not handled, failed, too slow", () => {
+test("CACHE_SCRIPT asks a handler for a thumbnail: made, not handled, failed, too slow", posix, () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "rl-pv-")));
   const cache = join(dir, ".cache");
   const id = "0123456789abcdef";
@@ -596,7 +607,7 @@ test("CACHE_SCRIPT asks a handler for a thumbnail: made, not handled, failed, to
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("CACHE_SCRIPT makes a real Quick Look thumbnail through the built-in handler (macOS)", { skip: process.platform !== "darwin" }, () => {
+test("CACHE_SCRIPT makes a real Quick Look thumbnail through the built-in handler (macOS)", { skip: posix.skip ?? process.platform !== "darwin" }, () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "rl-pv-")));
   const cache = join(dir, ".cache");
   const src = join(dir, "page one.html");
@@ -610,7 +621,7 @@ test("CACHE_SCRIPT makes a real Quick Look thumbnail through the built-in handle
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("the handler scripts parse under sh and dash", () => {
+test("the handler scripts parse under sh and dash", posix, () => {
   for (const file of [RUN, MACOS, LINUX]) {
     const r = spawnSync("/bin/sh", ["-n", file], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);

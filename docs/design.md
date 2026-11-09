@@ -70,6 +70,16 @@ it to `~/.local/bin/rl`. It never replaces another program called `rl` or a link
 copy of this one, and says when `~/.local/bin` is not on PATH or another `rl` comes first
 (`mods/readlist/core/install.js`).
 
+On Windows (no `sh`), `rl` is `mods/readlist/bin/windows/rl.ps1` (PowerShell 7) with the same
+commands, output, item format and id rule; the real path is the drive-letter path with the letter
+upper case, each name as it is on disk and links and junctions resolved (`C:\Users\you\plan.md`).
+`rl.cmd` runs it from cmd.exe and other programs, and an extensionless `rl` shim from Git Bash. It
+reads its arguments from the process's own argv (`pwsh -File` splits one like `-x:1`), parses
+JSON with `System.Text.Json` keeping each token as written, and writes the item with LF line ends.
+Install rl copies the three to `~\.local\bin` and, saying so in the banner first, adds that folder
+to the person's user PATH (`HKCU\Environment`, the other entries kept unexpanded) when it is not
+on PATH.
+
 Zero-install fallback, for an agent on a machine without `rl`: write the same JSON file (3.2) into
 the items folder with any file tool, using a temp name and a rename. `skill/reading-list/SKILL.md`
 spells it out for agents.
@@ -79,7 +89,7 @@ spells it out for agents.
 One folder per machine (section 9, call 2):
 
 ```text
-~/.local/state/reading-list/            ($READING_LIST_DIR overrides)
+~/.local/state/reading-list/            ($READING_LIST_DIR overrides; Windows: %LOCALAPPDATA%\reading-list)
   items/<id>.json                        one per item, written by producers only
   inbox/                                 drop folder: anything put here becomes an item
   state.json                             the person's read/done state, written by the mod only
@@ -322,7 +332,7 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
   tab-bar clone could show a badge later; this design does not clone or change shipped mods.
 - Items added with `--kind fyi` are listed but do not toast.
 
-### 4.5 Preview and open, per type (macOS; Linux below)
+### 4.5 Preview and open, per type (macOS; Linux and Windows below)
 
 | Type | In-pane preview | Enter (open) |
 |---|---|---|
@@ -382,6 +392,23 @@ script exits 127 and says what to install, and the mod shows that in a toast).
 - Paths reach D-Bus as GVariant string literals with every byte that is not unreserved
   percent-encoded, so no path can end the literal.
 
+**Windows.** Every small program the mod runs through `sh` elsewhere is an operation of
+`bin/windows/readlist.ps1`, run with `pwsh -File` and the same arguments (`core/helpers.js` maps
+each; the operations print what the scripts print, as UTF-8 with LF). The built-in handler is
+`handlers/windows.ps1`, run by `bin/windows/run-handler.ps1`:
+
+- Open is `Process.Start` of the path with the shell's default association. Reveal is
+  `explorer.exe /select,"PATH"` (a Windows path cannot hold a quote). The reveal-instead-of-open
+  rule adds the types Windows runs, installs, mounts or hands to a script host (`.exe`, `.bat`,
+  `.cmd`, `.ps1`, `.msi`, `.lnk`, `.vbs`, `.js`, `.hta`, `.chm`, `.reg`, `.iso`, ...,
+  `core/platform.js` `WINDOWS_RUNS`), and the handler itself refuses to open those and any type
+  in `PATHEXT`.
+- Space is the QuickLook app (`QuickLook.exe PATH`; run again on the same item, it closes) or else
+  PowerToys Peek (`PowerToys.Peek.UI.exe PATH`; it closes when it loses focus), found in their
+  per-user and all-users install folders; with neither, the in-pane preview as on Linux.
+- Thumbnails: none (the handler passes); images GPUI draws are copied, other types show their icon.
+- `READLIST_DRY_RUN=1` makes the handler print `would: ...` and run nothing (tests).
+
 ### 4.6 Remote items
 
 Items on another machine (a named machine in `machines()`, layout `ready`; `core/remote.js`):
@@ -399,8 +426,9 @@ Items on another machine (a named machine in `machines()`, layout `ready`; `core
 - **Offline:** a poll that fails (the exec rejects, times out or ends early) marks the machine
   offline; its items stay from the last poll that answered, with an "offline" chip, until a poll
   answers again. A machine whose layout is `unavailable` is offline the same way. A machine that is
-  gone from `machines()` is dropped. A machine without `sh` (Windows: exec says "cannot start sh")
-  is "unsupported", not offline, and is not polled again until it reconnects. All of this is in
+  gone from `machines()` is dropped. A machine without `sh` (Windows as another machine: exec says
+  "cannot start sh"; the mod running on Windows uses PowerShell for its own machine only) is
+  "unsupported", not offline, and is not polled again until it reconnects. All of this is in
   memory, per copy: after a restart an offline machine shows nothing until it answers.
 - **Preview text:** `readTextFile(path, {on: m})` (row 5) up to 1 MiB (the first 512 KiB shown, as
   here); larger, or text `readTextFile` cannot read, through `head` on that machine. Folders are
@@ -433,8 +461,8 @@ Items on another machine (a named machine in `machines()`, layout `ready`; `core
 
 Open, reveal, the Space preview window and thumbnails (4.5) are handlers: programs the mod runs
 with the item. The platform's built-in one ships in the mod (`handlers/macos.sh`,
-`handlers/linux.sh`, POSIX `sh`, holding exactly the calls in 4.5); the person may put their own in
-front of it. Windows gets a built-in handler on the same interface next.
+`handlers/linux.sh`, POSIX `sh`, and `handlers/windows.ps1`, PowerShell 7, holding exactly the
+calls in 4.5); the person may put their own in front of it.
 
 - **Interface.** `HANDLER ACTION [ARG...] -- ITEM`, argv only. ITEM is the only item data and always
   the last argument: an absolute path with its folders resolved (a remote item's fetched copy), or
@@ -467,6 +495,21 @@ front of it. Windows gets a built-in handler on the same interface next.
   `shasum -a 256`) match `trust.json`. Otherwise it exits 11 with `readlist: why` and runs nothing;
   the mod runs the built-in handler, toasts the reason once, and shows a banner with the path:
   **Use it** (confirm the file as it is now) for a changed or moved handler, "Turn off" always.
+- **Windows.** The runner is `bin/windows/run-handler.ps1` (`pwsh -File`), the person's handler
+  `readlist\handler.ps1` (a program needs an extension to run there). The check follows links and
+  junctions (at most 20) and refuses a file that is not `.ps1`, not owned by the person (or
+  Administrators, the owner of what an elevated program writes, or SYSTEM), or that any account
+  but the person, SYSTEM, Administrators and TrustedInstaller may write, append to, delete,
+  re-permission or take (an allow entry that applies to the file itself; Everyone, Users and
+  Authenticated Users included). Its folder must be owned by one of those and let no one else add,
+  delete or rename entries or change it; every folder above it, and above each link, the same
+  except that others may create new folders (Windows lets every user do that at a drive's root,
+  which cannot replace what is already there). The hash is SHA-256 of the file. The handler runs
+  in a pwsh of its own, with no argument before `--` starting with `-` (`pwsh -File` would split
+  `-a:b`), and is stopped with every program it started after 12 s (28 s for a thumbnail), below
+  the mod's own limits, since stopping the runner would not stop its child there. Item paths are
+  drive-letter paths only: never a network (`\\server`) or device path, and never one with `:` in a
+  name (an alternate data stream).
 - **What is not trusted.** Item fields, inbox drops, other machines and transcripts never choose,
   enable or change a handler; titles, notes and names never reach one; links reach one only as
   http(s). The rule that Enter on a file that could run reveals it (4.5) holds before any handler

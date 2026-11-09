@@ -1,7 +1,8 @@
 // Item files: parsing what the folder holds, what type an item is, and how Enter opens it.
 // Pure functions, shared by the mod and the node tests. See docs/design.md 3.2 and 4.5.
 
-import { LINUX_RUNS } from "./platform.js";
+import { LINUX_RUNS, WINDOWS_RUNS } from "./platform.js";
+import { isAbsPath, isWinPath, baseName, joinPath } from "./paths.js";
 
 const ID = /^[0-9a-f]{16}$/;
 const KINDS = new Set(["review", "fyi", "result"]);
@@ -10,6 +11,7 @@ const KINDS = new Set(["review", "fyi", "result"]);
 export const LIST_SCRIPT = 'for f in "$1"/*.json; do [ -f "$f" ] || continue; printf "\\036"; cat "$f"; done';
 
 // For each path argument, one line: d (folder), x (executable file), f (file), - (missing).
+// (Windows: bin/windows/readlist.ps1 `stat`, `stats` and `list` stand for these three.)
 export const STAT_SCRIPT = 'for p; do if [ -d "$p" ]; then echo d; elif [ -x "$p" ]; then echo x; elif [ -e "$p" ]; then echo f; else echo -; fi; done';
 
 // STAT_SCRIPT's letter and the mtime (epoch seconds, 0 if unknown) for each path argument,
@@ -31,25 +33,27 @@ export function parseStats(stdout, paths) {
 }
 
 // The file an item lives in, as rl writes it; throws on anything that isn't a list id, so a
-// delete can only ever remove items/<16 hex>.json under the list folder.
+// delete can only ever remove items/<16 hex>.json under the list folder (items\<16 hex>.json
+// on Windows).
 export function itemFile(dir, id) {
-  if (typeof dir !== "string" || !dir.startsWith("/") || !ID.test(id)) throw new Error(`not a list item: ${id}`);
-  return `${dir.replace(/\/+$/, "")}/items/${id}.json`;
+  if (!isAbsPath(dir) || !ID.test(id)) throw new Error(`not a list item: ${id}`);
+  return isWinPath(dir) ? joinPath(dir, `items/${id}.json`) : `${dir.replace(/\/+$/, "")}/items/${id}.json`;
 }
 
 const str = (v) => (typeof v === "string" ? v : null);
 const time = (v) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : null);
 
 // One item from its parsed JSON, or null if it isn't a v1 item. Unknown fields are dropped.
+// Its path is absolute in either form: /... (macOS, Linux) or C:\... (Windows).
 export function normalizeItem(raw) {
   if (!raw || typeof raw !== "object" || raw.v !== 1 || !ID.test(raw.id ?? "")) return null;
   const path = str(raw.path);
   const url = str(raw.url);
-  if (path ? !path.startsWith("/") : !(url && /^https?:\/\/[^/\s]+/i.test(url))) return null;
+  if (path ? !isAbsPath(path) : !(url && /^https?:\/\/[^/\s]+/i.test(url))) return null;
   const added = time(raw.added_at);
   if (!added) return null;
   const by = raw.by && typeof raw.by === "object" ? raw.by : {};
-  const base = path ? path.replace(/\/+$/, "").split("/").pop() || path : url.replace(/^https?:\/\//i, "");
+  const base = path ? baseName(path) || path : url.replace(/^https?:\/\//i, "");
   return {
     id: raw.id,
     path: path || null,
@@ -99,7 +103,7 @@ export function parseListing(stdout) {
 }
 
 const ext = (path) => {
-  const name = path.replace(/\/+$/, "").split("/").pop() ?? "";
+  const name = baseName(path);
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 };
@@ -133,14 +137,14 @@ const RUNS = new Set([
 
 // How Enter opens an item: { how: "url" | "open" | "reveal" | "missing", target }.
 // Executable files, folders with an extension (bundles such as .app) and the types in
-// RUNS (on Linux also LINUX_RUNS) are revealed in the file manager instead of opened, so
-// the list never launches anything.
+// RUNS (on Linux also LINUX_RUNS, on Windows WINDOWS_RUNS) are revealed in the file manager
+// instead of opened, so the list never launches anything.
 export function openAction(item, fsKind, platform = "macos") {
   if (item.url) return { how: "url", target: item.url };
   if (fsKind === "-" || !fsKind) return { how: "missing", target: item.path };
   if (fsKind === "x") return { how: "reveal", target: item.path };
   const e = ext(item.path);
   if (fsKind === "d") return { how: e ? "reveal" : "open", target: item.path };
-  const runs = RUNS.has(e) || (platform === "linux" && LINUX_RUNS.has(e));
+  const runs = RUNS.has(e) || (platform === "linux" && LINUX_RUNS.has(e)) || (platform === "windows" && WINDOWS_RUNS.has(e));
   return { how: runs ? "reveal" : "open", target: item.path };
 }

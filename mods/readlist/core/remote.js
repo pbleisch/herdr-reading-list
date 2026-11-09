@@ -5,6 +5,7 @@
 
 import { parseListing, itemKey } from "./items.js";
 import { RL_STATUS_SCRIPT, parseRlStatus } from "./install.js";
+import { baseName } from "./paths.js";
 
 // How often each remote machine is listed while a copy of the mod is alive.
 export const POLL_MS = 15000;
@@ -161,7 +162,7 @@ export function safeName(name) {
 // The folders and files of an item's copy, relative to the cache folder.
 export function copyPaths(machine, id, path) {
   if (!/^[0-9a-f]{16}$/.test(id ?? "")) throw new Error(`not a list item: ${id}`);
-  let name = (path ?? "").replace(/\/+$/, "").split("/").pop() || "file";
+  let name = baseName(path) || "file";
   if (name === "." || name === "..") name = "file";
   const dir = `remote/${safeName(machine)}/${id}`;
   return { dir, copy: `${dir}/copy/${name}`, meta: `${dir}/meta`, thumbs: `${dir}/thumbs` };

@@ -23,6 +23,16 @@ export const words = (platform) => WORDS[platform] ?? WORDS.macos;
 // in core/items.js RUNS (docs/design.md 8).
 export const LINUX_RUNS = new Set(["desktop", "appimage", "run", "bin", "deb", "rpm", "snap", "flatpak", "flatpakref", "flatpakrepo"]);
 
+// File types Windows runs, installs, mounts or hands to a script host rather than shows when
+// opened, on top of RUNS (docs/design.md 8). handlers/windows.ps1 refuses to open these and
+// any type in PATHEXT.
+export const WINDOWS_RUNS = new Set([
+  "com", "psm1", "psd1", "ps1xml", "msp", "mst", "msix", "msixbundle", "appx", "appxbundle", "appinstaller",
+  "application", "appref-ms", "lnk", "website", "pif", "cpl", "msc", "inf", "reg", "vbe", "js", "jse", "wsf",
+  "wsh", "wsc", "ws", "hta", "chm", "gadget", "scf", "settingcontent-ms", "library-ms", "search-ms",
+  "searchconnector-ms", "diagcab", "msh", "msh1", "msh2", "mshxml", "iso", "img", "vhd", "vhdx", "xll",
+]);
+
 // Space when no handler showed a preview window: why, in one line, for the toast. `reason`
 // is what the built-in handler said when it passed (Linux: Sushi or gdbus is missing).
 export function noQuickLook(reason) {

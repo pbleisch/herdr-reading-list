@@ -1,0 +1,9 @@
+#!/bin/sh
+# rl: put files and URLs on the person's Herdr reading list.
+# The Windows rl for Git Bash and other POSIX shells there: runs rl.ps1 next to this file
+# with PowerShell 7 (pwsh).
+command -v pwsh >/dev/null 2>&1 || {
+	echo "rl: needs PowerShell 7 (pwsh): https://aka.ms/powershell" >&2
+	exit 1
+}
+RL_VIA=sh exec pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(dirname -- "$0")/rl.ps1" "$@"

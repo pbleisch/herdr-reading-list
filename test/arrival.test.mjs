@@ -12,7 +12,7 @@ import { INBOX_SCRIPT, ADD_SCRIPT, parseInbox, inboxPlan, SETTLE_S } from "../mo
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "../mods/readlist/core/viewer.js";
 import { mergeKeys, forPlatform } from "../bin/merge-keys.mjs";
 
-const repo = new URL("..", import.meta.url).pathname;
+import { repo, posix } from "./support.mjs";
 let n = 0;
 const item = (over = {}) => normalizeItem({
   v: 1,
@@ -203,7 +203,7 @@ test("read records the file's mtime; changed when the file moves on", () => {
   assert.equal(isChanged(i, applyAction(parseState(null), i.id, "read", "2026-11-09T00:00:00Z"), 1700000500), false);
 });
 
-test("STATS_SCRIPT and parseStats give kind and mtime per path", () => {
+test("STATS_SCRIPT and parseStats give kind and mtime per path", posix, () => {
   const dir = mkdtempSync(join(tmpdir(), "rl-stats-"));
   writeFileSync(join(dir, "a b.md"), "x");
   utimesSync(join(dir, "a b.md"), 1700000000, 1700000000);
@@ -245,7 +245,7 @@ test("inboxPlan adds new and replaced entries once, waits for fresh ones, forget
   assert.equal(inboxPlan(entries.slice(0, 3), again.inbox, now + 9).changed, false);
 });
 
-test("INBOX_SCRIPT lists entries with mtimes; parseInbox skips hidden and partial ones", () => {
+test("INBOX_SCRIPT lists entries with mtimes; parseInbox skips hidden and partial ones", posix, () => {
   const dir = mkdtempSync(join(tmpdir(), "rl-inbox-"));
   writeFileSync(join(dir, "shot one.png"), "x");
   utimesSync(join(dir, "shot one.png"), 1700000000, 1700000000);
@@ -261,7 +261,7 @@ test("INBOX_SCRIPT lists entries with mtimes; parseInbox skips hidden and partia
   assert.deepEqual(parseInbox("12\ta\0garbage\0\tb\0"), [{ name: "a", mtime: 12 }]);
 });
 
-test("ADD_SCRIPT adds through rl, prints ids, and reports failures", () => {
+test("ADD_SCRIPT adds through rl, prints ids, and reports failures", posix, () => {
   const home = mkdtempSync(join(tmpdir(), "rl-add-"));
   const list = join(home, "list");
   const rl = join(repo, "mods/readlist/bin/rl");
