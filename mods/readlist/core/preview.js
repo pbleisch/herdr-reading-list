@@ -3,7 +3,7 @@
 // node tests. See docs/design.md 4.2 and 4.5.
 
 import { typeOf } from "./items.js";
-import { thumbnails } from "./platform.js";
+import { THUMB_SECONDS } from "./handlers.js";
 
 // Under this width (logical px) the pane is narrow: the preview is hidden until `p`, and
 // shown below the list. At or above it, the list is on the left and the preview on the right.
@@ -14,7 +14,7 @@ export const TEXT_BYTES = 512 * 1024;
 export const FOLDER_ENTRIES = 200;
 
 // Images GPUI draws itself; these are copied into the cache as they are. Other images
-// (HEIC, TIFF, PSD, ...) get a Quick Look thumbnail like HTML and PDF do.
+// (HEIC, TIFF, PSD, ...) get a thumbnail from a handler like HTML and PDF do.
 const DRAWN = new Set(["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"]);
 
 const LANG = { mjs: "js", cjs: "js", ts: "js", tsx: "js", jsx: "js", jsonc: "json", yml: "yaml", toml: "yaml", zsh: "bash", sh: "bash", htm: "html", xhtml: "html" };
@@ -32,9 +32,10 @@ export function previewShown(width, choice) {
 }
 
 // What the preview draws for an item, given its STAT line (`kind mtime size`, or `-`):
-// { how: "url" | "missing" | "markdown" | "text" | "image" | "thumb" | "icon" | "folder",
-// lang?, ext? }. "icon" (the type's icon, no thumbnail) is for platforms without Quick Look.
-export function previewKind(item, fsKind, platform = "macos") {
+// { how: "url" | "missing" | "markdown" | "text" | "image" | "thumb" | "folder", lang?, ext? }.
+// "thumb" asks the handlers for a thumbnail (core/handlers.js); when none makes one, the
+// preview shows the type's icon.
+export function previewKind(item, fsKind) {
   if (item.url) return { how: "url" };
   if (!fsKind || fsKind === "-") return { how: "missing" };
   if (fsKind === "d") return { how: "folder" };
@@ -43,11 +44,11 @@ export function previewKind(item, fsKind, platform = "macos") {
   if (type === "md") return { how: "markdown" };
   if (type === "code" || type === "text") return { how: "text", lang: LANG[e] ?? (e || "text") };
   if (type === "image" && DRAWN.has(e)) return { how: "image", ext: e };
-  return noThumb(platform);
+  return THUMB;
 }
 
-// A file with no drawn preview: a Quick Look thumbnail, or where there is none its icon.
-export const noThumb = (platform = "macos") => (thumbnails(platform) ? { how: "thumb" } : { how: "icon" });
+// A file with no drawn preview: a thumbnail from a handler.
+export const THUMB = Object.freeze({ how: "thumb" });
 
 // Thumbnail width in pixels for a preview this many logical pixels wide: two pixels per
 // point for Retina, in two steps so a resize does not remake every thumbnail.
@@ -57,10 +58,12 @@ export function thumbSize(width) {
 
 // The cached image for an item at a given file version, relative to the cache folder. The
 // version (mtime and size) is in the name, so a changed file gets a new image and image()
-// never shows a stale one. Thumbnails also carry their size.
-export function cacheName(id, stat, kind, size) {
+// never shows a stale one. Thumbnails also carry their size, and the person's handler's
+// tag when it was asked first (core/handlers.js chain), so turning it on or off, or
+// confirming a new version, makes them again.
+export function cacheName(id, stat, kind, size, tag = "") {
   const v = `${stat.mtime}-${stat.size}`;
-  return kind.how === "image" ? `${id}-${v}.${kind.ext}` : `${id}-${v}-${size}.png`;
+  return kind.how === "image" ? `${id}-${v}.${kind.ext}` : `${id}-${v}-${size}${tag ? `-${tag}` : ""}.png`;
 }
 
 // One line about a path: `kind mtime size`, kind d (folder), x (executable), f (file); or
@@ -83,28 +86,34 @@ export const HEAD_SCRIPT = `head -c ${TEXT_BYTES} -- "$1"`;
 // pane can say there are more.
 export const LIST_DIR_SCRIPT = `ls -1Ap -- "$1" | head -n ${FOLDER_ENTRIES + 1}`;
 
-// The longest a Quick Look thumbnail may take.
-export const QL_SECONDS = 20;
-
 // Puts an image for $1 at $3 (inside the cache folder $2), and removes the item's older
-// images ($4 is the item id). $5 is "copy", or the thumbnail size for Quick Look
-// (qlmanage -t, row 28). Several copies of the mod may make the same image at once, so
-// each works in its own hidden temporary folder and renames the result into place.
-// qlmanage never returns for a file Quick Look has no thumbnail for, so it is stopped
-// after QL_SECONDS (its pid only; the watchdog's output is closed so exec does not wait).
+// images ($4 is the item id). $5 is "copy", or the thumbnail size; then the rest is the
+// handler to ask (core/handlers.js chain: its command and args), run as
+// `... path SRC thumbnail SIZE OUT` with OUT in a fresh folder of its own and stopped after
+// THUMB_SECONDS (its pid only; the watchdog's output is closed so exec does not wait, and
+// the shell's "Terminated" notice is kept out of the message).
+// Exits 10 when the handler did not handle it, so the next one can be asked with the same
+// arguments. Several copies of the mod may make the same image at once, so each works in
+// its own hidden temporary folder and renames the result into place.
 export const CACHE_SCRIPT = [
-  'set -u; src=$1; dir=$2; out=$3; id=$4; how=$5',
+  'set -u; src=$1; dir=$2; out=$3; id=$4; how=$5; shift 5',
   'mkdir -p "$dir" && t=$(mktemp -d "$dir/.make.XXXXXX") || exit 1',
+  's=0',
   'if [ -f "$out" ]; then :',
   'elif [ "$how" = copy ]; then cp "$src" "$t/copy" && mv "$t/copy" "$out"',
-  'else qlmanage -t -s "$how" -o "$t" "$src" >/dev/null 2>&1 & q=$!',
-  `  ( sleep ${QL_SECONDS}; kill "$q" 2>/dev/null ) >/dev/null 2>&1 </dev/null & w=$!`,
-  '  wait "$q"; kill "$w" 2>/dev/null',
-  '  f=$(ls "$t" | head -n 1)',
-  '  [ -n "$f" ] && mv "$t/$f" "$out"',
+  'else mkdir "$t/h" || exit 1',
+  '  "$@" path "$src" thumbnail "$how" "$t/h/thumb.png" >/dev/null 2>"$t/err" </dev/null & h=$!',
+  `  ( sleep ${THUMB_SECONDS}; kill "$h" 2>/dev/null ) >/dev/null 2>&1 </dev/null & w=$!`,
+  '  wait "$h" 2>/dev/null; s=$?; kill "$w" 2>/dev/null; wait "$w" 2>/dev/null',
+  '  if [ $s = 0 ]; then [ -f "$t/h/thumb.png" ] && mv "$t/h/thumb.png" "$out"',
+  '  elif [ $s = 10 ]; then rm -rf "$t"; exit 10',
+  `  elif [ $s -gt 128 ] && [ ! -s "$t/err" ]; then echo "the handler took over ${THUMB_SECONDS} s" > "$t/err"; fi`,
+  'fi',
+  'if [ ! -f "$out" ]; then',
+  '  if [ -s "$t/err" ]; then cat "$t/err" >&2; else echo "the handler made no thumbnail" >&2; fi',
+  '  rm -rf "$t"; [ $s = 0 ] && exit 1; exit $s',
   'fi',
   'rm -rf "$t"',
-  '[ -f "$out" ] || { echo "Quick Look has no thumbnail for this file" >&2; exit 1; }',
   'for f in "$dir/$id"-*; do [ -e "$f" ] && [ "$f" != "$out" ] && rm -f "$f"; done',
   'exit 0',
 ].join("\n");

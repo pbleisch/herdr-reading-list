@@ -8,15 +8,18 @@
 // popup (mod.open:readlist: cmd-shift-i on macOS, ctrl-shift-i on Linux). Props {role: "viewer"} is the preview-only pane
 // `v` opens; props {menu} is a filter menu one of the others opened. When the person turns
 // it on, files Claude Code agents here send with SendUserFile are added too (core/sent.js).
-// Opening, revealing and the Space preview use the platform's tools (core/platform.js).
+// Opening, revealing, the Space preview and thumbnails go to action handlers: the
+// platform's built-in one, and first the person's own when they turned it on
+// (core/handlers.js).
 // See docs/design.md in the herdr-reading-list repo.
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, VirtualListScrollHandle, TextView, Editor, EditorState, InputState, Input } from "gpui-base";
 import { exec, hc, readTextFile, writeTextFile, watchFolder, nextCommand, agents, spaces, panes, focused, machines, theme, settings, layout, props, notify, appHome, run, shared, setShared, openOverlay, closeOverlay, window as appWindow } from "herdr";
 import { LIST_SCRIPT, STAT_SCRIPT, STATS_SCRIPT, parseListing, parseStats, typeOf, openAction, itemFile, itemKey } from "./core/items.js";
-import { WIDE, TEXT_BYTES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, parseStat, previewKind, noThumb, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
-import { MISSING, platformOf, words, openCommand, sushiCommand, quickLook, noQuickLook } from "./core/platform.js";
+import { WIDE, TEXT_BYTES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, THUMB, parseStat, previewKind, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
+import { platformOf, words, noQuickLook } from "./core/platform.js";
+import { TIMEOUT_MS, THUMB_SECONDS, USER_HANDLER, TRUST_FILE, RUNNER, chain, runChain, token, outcome, parseTrust, serializeTrust, parseCheck, handlerState, handlerBanner } from "./core/handlers.js";
 import { parseState, serializeState, applyAction, prune, rowsFor, counts, ago, who, isRead, isDone, isChanged, withInbox } from "./core/state.js";
 import { NO_FILTER, applyFilters, filterRows, isFiltered, options, labelFor } from "./core/filters.js";
 import { BURST_MS, arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction } from "./core/arrival.js";
@@ -57,16 +60,13 @@ const REMOTE_CACHE = `${MOD}/.cache`;
 const TOASTED = "readlist.toasted", QUIET = "readlist.quiet", UNREAD = "readlist.unread";
 const SELECTED = "readlist.selected", VIEWER = "readlist.viewer", PICK = "readlist.pick";
 const KEYBOARD = "readlist.keyboard";
-
-// macOS: Quick Look in the background, so the panel outlives exec's 30 s limit; prints its pid.
-const PREVIEW_SCRIPT = 'qlmanage -p "$1" >/dev/null 2>&1 </dev/null & echo $!';
-// Closes the panel this mod opened: kills that pid only while it is still qlmanage.
-const CLOSE_SCRIPT = 'case "$(ps -o comm= -p "$1" 2>/dev/null)" in *qlmanage) kill "$1";; *) exit 1;; esac';
+// Bumped when the person turns their handler on or off, so every copy checks it again.
+const HANDLER = "readlist.handler";
 const DOUBLE_MS = 500;
 
 const DIR_SCRIPT = 'd=${READING_LIST_DIR:-$HOME/.local/state/reading-list}; mkdir -p "$d/items" "$d/inbox" && cd "$d" && pwd -P';
 
-const MENU_TITLE = { space: "Space", agent: "Agent", type: "Type", unread: "Show", sources: "Also add" };
+const MENU_TITLE = { space: "Space", agent: "Agent", type: "Type", unread: "Show", sources: "Also add", actions: "Actions" };
 const ALL = { space: "All spaces", agent: "All agents", type: "All types" };
 const MENU_ROW = 29, MENU_HEAD = 25;
 
@@ -148,6 +148,14 @@ export default class ReadingList extends View {
     // (address -> { sig, session, sends }), and the agents' addresses and states then.
     this.sentCache = new Map();
     this.agentKey = "";
+    // The person's handler (core/handlers.js handlerState), the reason the built-in handler
+    // gave for not showing a preview window (then Space uses the pane), the thumbnails no
+    // handler made (cache name -> the preview to show instead, so a failure is not tried
+    // again until the file or the handlers change), and the last refusal toasted.
+    this.hs = { state: "off" };
+    this.noLook = null;
+    this.thumbFailed = new Map();
+    this.refusedSaid = null;
     this.scroll = VirtualListScrollHandle.new();
     cx.spawn(async (cx) => {
       try {
@@ -163,6 +171,7 @@ export default class ReadingList extends View {
       this.watch(cx);
     });
     this.checkRl(cx);
+    this.checkHandler(cx);
     // Other machines: listed now and every POLL_MS while this copy is alive.
     this.pollAll(cx);
     cx.timer.every(POLL_MS, (cx) => this.pollAll(cx));
@@ -182,8 +191,9 @@ export default class ReadingList extends View {
     cx.timer.every(30000, (cx) => {
       if (this.dir) this.reload(cx);
       else cx.notify();
-      // rl may have been installed (or removed) from a terminal.
+      // rl may have been installed (or removed) from a terminal; the person's handler edited.
       this.checkRl(cx);
+      this.checkHandler(cx);
       this.scanSent(cx);
     });
     // An agent's send usually ends or pauses its turn: read the transcripts again when a
@@ -786,9 +796,9 @@ export default class ReadingList extends View {
       const c = await this.copyFor(item, "Enter");
       if (!c) return false;
       const act = openAction({ ...item, path: c.path }, c.st.kind, this.platform);
-      const r = await this.launch(act.how, act.target);
-      if (r.code !== 0) {
-        notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${r.stderr.trim()}`, level: "error" });
+      const r = await this.launch(act.how, act.target, cx);
+      if (!r.ok) {
+        notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${r.message}`, level: "error" });
         return false;
       }
       if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so its copy is shown in ${words(this.platform).files} instead of opened.`, level: "info" });
@@ -806,11 +816,19 @@ export default class ReadingList extends View {
       notify({ title: "Reading list", body: `${item.title} is gone: ${item.path}`, level: "warning" });
       return false;
     }
-    if (act.how === "url") cx.open_url(act.target);
-    else {
-      const r = await this.launch(act.how, act.target);
-      if (r.code !== 0) {
-        notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${r.stderr.trim()}`, level: "error" });
+    if (act.how === "url") {
+      // An http(s) link goes to the handlers first (the built-in ones pass it on); any
+      // other link, and one no handler took, opens through Herdr in the browser.
+      const r = /^https?:\/\//i.test(act.target) ? await this.runAction("open-url", act.target, {}, cx) : { status: "pass" };
+      if (r.status === "failed") {
+        notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${r.message}`, level: "error" });
+        return false;
+      }
+      if (r.status === "pass") cx.open_url(act.target);
+    } else {
+      const r = await this.launch(act.how, act.target, cx);
+      if (!r.ok) {
+        notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${r.message}`, level: "error" });
         return false;
       }
       if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so it's shown in ${words(this.platform).files} instead of opened.`, level: "info" });
@@ -819,13 +837,117 @@ export default class ReadingList extends View {
     return true;
   }
 
-  // Opens (how "open") or reveals (how "reveal") a file with the platform's tools
-  // (core/platform.js): `open` on macOS, xdg-open and the file manager on Linux. A missing
-  // tool comes back as a failure whose stderr says what to install.
-  async launch(how, path) {
-    const c = openCommand(this.platform, how, path);
-    if (!c) return { code: 1, stdout: "", stderr: "this platform is not supported yet" };
-    return exec(c.command, c.args).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+  // Opens (how "open") or reveals (how "reveal") a file through the handlers: { ok } or
+  // { ok: false, message } for the toast.
+  async launch(how, path, cx) {
+    const r = await this.runAction(how, path, {}, cx);
+    if (r.status === "ok") return { ok: true };
+    return { ok: false, message: r.status === "pass" ? "this platform is not supported yet" : r.message };
+  }
+
+  // ---- action handlers (core/handlers.js) ----
+
+  trustPath() {
+    return `${appHome()}/${TRUST_FILE}`;
+  }
+
+  handlerPath() {
+    return `${appHome()}/${USER_HANDLER}`;
+  }
+
+  // The handlers to try now, first to last: the person's while trust.json says it is on
+  // (bin/run-handler refuses it unless it is still the file they turned on), then the
+  // platform's built-in one.
+  async handlers() {
+    const trust = parseTrust(await readTextFile(this.trustPath()).catch(() => null));
+    return chain(this.platform, appHome(), trust, MOD);
+  }
+
+  // Runs `action` on `item` (a path; a link for open-url) through the handlers in turn
+  // until one handles it: { status: "ok" | "failed" | "pass", stdout, message, who }. Each
+  // handler runs once, with a time limit; nothing is tried again. `extra(h)` gives the
+  // action's arguments, `only` limits it to one handler ("user" or "builtin"), `list` is
+  // the handlers to use (default: handlers()).
+  async runAction(action, item, { extra = () => [], only = null, list = null } = {}, cx) {
+    return runChain(list ?? (await this.handlers()), action, item, {
+      exec: (command, args) => exec(command, args, { timeout: TIMEOUT_MS }),
+      extra,
+      only,
+      // The built-in handler said it has no preview window here (no Sushi): not asked again.
+      skip: (h) => action === "preview" && h.who === "builtin" && Boolean(this.noLook),
+      onRefused: (message) => this.refused(message, cx),
+      onPass: (h, message) => {
+        if (action === "preview" && h.who === "builtin") this.noLook = { reason: /^it exited with \d+$/.test(message) ? "" : message };
+      },
+    });
+  }
+
+  // bin/run-handler would not run the person's handler (it changed, moved, or is not safe):
+  // the built-in one acts instead. Says so once per reason, and checks it again for the
+  // banner.
+  refused(message, cx) {
+    if (this.refusedSaid !== message) {
+      this.refusedSaid = message;
+      notify({ title: "Reading list", body: `Your handler was not run: ${message}. The built-in action ran instead.`, level: "warning", timeout: 8000 });
+    }
+    if (cx) this.checkHandler(cx);
+  }
+
+  // Which handler the list uses (this.hs), for the banner, the menu and the key hints.
+  checkHandler(cx) {
+    cx.spawn(async (cx) => {
+      const trust = parseTrust(await readTextFile(this.trustPath()).catch(() => null));
+      let check = null;
+      if (trust) {
+        const r = await exec("sh", [`${appHome()}/${MOD}/${RUNNER}`, "check", this.handlerPath()], { timeout: TIMEOUT_MS }).catch(() => null);
+        check = r?.code === 0 ? parseCheck(r.stdout) : { state: "refused", why: "it could not be checked" };
+      }
+      const hs = handlerState(trust, check);
+      if (JSON.stringify(hs) === JSON.stringify(this.hs)) return;
+      this.hs = hs;
+      this.thumbFailed.clear();
+      if (hs.state === "on") this.refusedSaid = null;
+      // The previews follow: thumbnails may come from another handler now.
+      this.gen++;
+      cx.notify();
+    });
+  }
+
+  // readlist.handler, the f menu's Actions and the banner: turns the person's handler on
+  // (`want` true: the file as it is now, after its check passes), or off (false). null
+  // toggles: off when it is on (or gone, or refused), on when it is off or changed.
+  setHandler(want, cx) {
+    if (this.settingHandler) return;
+    this.settingHandler = true;
+    cx.spawn(async (cx) => {
+      const say = (body, level = "info") => notify({ title: "Reading list", body, level, timeout: 8000 });
+      try {
+        const path = this.trustPath();
+        const text = await readTextFile(path).catch(() => null);
+        const trust = parseTrust(text);
+        const r = await exec("sh", [`${appHome()}/${MOD}/${RUNNER}`, "check", this.handlerPath()], { timeout: TIMEOUT_MS }).catch(() => null);
+        const check = r?.code === 0 ? parseCheck(r.stdout) : { state: "refused", why: "it could not be checked" };
+        const hs = handlerState(trust, check);
+        const on = want ?? !["on", "missing", "refused"].includes(hs.state);
+        if (on && hs.state === "on") return;
+        if (!on && !trust) return;
+        if (on && check.state === "missing") return say(`There is no handler at ${this.handlerPath()}. The README's "Your own handler" says how to write one.`, "warning");
+        if (on && check.state !== "ok") return say(`Your handler was not turned on: ${check.why}.`, "warning");
+        const next = on ? { path: check.path, sha256: check.sha256, at: nowIso() } : null;
+        try {
+          await writeTextFile(path, serializeTrust(next), text);
+        } catch (e) {
+          return say(`Couldn't save the setting: ${String(e?.message ?? e)}`, "warning");
+        }
+        say(on ? `Enter, Space, o and thumbnails now ask your handler first: ${check.path}` : "Your handler is off; the list uses its built-in actions.");
+        setShared(HANDLER, Date.now());
+        this.handlerSeen = shared(HANDLER);
+        this.checkHandler(cx);
+      } finally {
+        this.settingHandler = false;
+        cx.notify();
+      }
+    });
   }
 
   // Opens an item; the popup then closes (Enter opens and closes it, docs/design.md 4.1).
@@ -835,20 +957,25 @@ export default class ReadingList extends View {
     });
   }
 
-  // Space: a preview window, a toggle like Finder's: the macOS Quick Look panel, or GNOME
-  // Sushi on Linux. Without one (no Sushi, Windows) the in-pane preview instead. Never marks
-  // read and never runs anything (both only draw a preview).
+  // Space: a preview window from a handler, a toggle like Finder's: the macOS Quick Look
+  // panel, GNOME Sushi on Linux, or what the person's handler shows. Without one (no Sushi,
+  // Windows, a handler that passes) the in-pane preview instead. Never marks read and never
+  // runs anything (both only draw a preview).
   async preview(item, cx) {
-    const look = quickLook(this.platform, this.noSushi);
-    if (look === "pane") return this.previewHere(item, cx);
+    const list = await this.handlers();
+    if (!list.some((h) => !(h.who === "builtin" && this.noLook))) return this.previewHere(item, cx);
+    const key = itemKey(item);
+    // The preview window open now: Space again on its item closes it (and shows it again
+    // when there was nothing to close); on another item, its handler is told first.
     const open = this.quicklook;
     this.quicklook = null;
-    if (open && look === "qlmanage") {
-      const r = await exec("sh", ["-c", CLOSE_SCRIPT, "readlist", open.pid]).catch(() => null);
-      if (r?.code === 0 && open.id === itemKey(item)) return;
+    if (open) {
+      const same = open.id === key;
+      const r = await this.runAction("preview-close", open.path, { only: open.who, list, extra: () => [open.token, same ? "same" : "other"] }, cx);
+      if (same && r.status === "ok") return;
     }
     if (!item.path) {
-      notify({ title: "Reading list", body: look === "qlmanage" ? "Quick Look has no preview for a link; Enter opens it." : "A link has no preview window; Enter opens it.", level: "info" });
+      notify({ title: "Reading list", body: this.platform === "macos" ? "Quick Look has no preview for a link; Enter opens it." : "A link has no preview window; Enter opens it.", level: "info" });
       return;
     }
     // Another machine's file: the preview window shows its local copy.
@@ -864,32 +991,13 @@ export default class ReadingList extends View {
         return;
       }
     }
-    if (look === "sushi") return this.sushi(item, path, open, cx);
-    const r = await exec("sh", ["-c", PREVIEW_SCRIPT, "readlist", path]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
-    const pid = r.stdout.trim();
-    if (r.code !== 0 || !/^\d+$/.test(pid)) {
-      notify({ title: "Reading list", body: `Couldn't preview ${item.title}: ${r.stderr.trim()}`, level: "error" });
+    const r = await this.runAction("preview", path, { list }, cx);
+    if (r.status === "pass") return this.previewHere(item, cx);
+    if (r.status !== "ok") {
+      notify({ title: "Reading list", body: `Couldn't preview ${item.title}: ${r.message}`, level: "error" });
       return;
     }
-    this.quicklook = { id: itemKey(item), pid };
-  }
-
-  // Linux: GNOME Sushi shows `path`; Space again on the same item closes it. When there is
-  // no Sushi (or no gdbus), says so once and shows the in-pane preview from then on.
-  async sushi(item, path, open, cx) {
-    const again = open?.id === itemKey(item);
-    const c = sushiCommand(path, again);
-    const r = await exec(c.command, c.args).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
-    const why = r.stdout.trim();
-    if (r.code === MISSING && (why === "no-sushi" || why === "no-gdbus")) {
-      this.noSushi = why;
-      return this.previewHere(item, cx);
-    }
-    if (r.code !== 0) {
-      notify({ title: "Reading list", body: `Couldn't preview ${item.title}: ${r.stderr.trim() || why}`, level: "error" });
-      return;
-    }
-    this.quicklook = again ? null : { id: itemKey(item) };
+    this.quicklook = { id: key, path, who: r.who, token: token(r.stdout) };
   }
 
   // Space without a preview window: shows or hides the in-pane preview (as `p` does), or in
@@ -897,7 +1005,7 @@ export default class ReadingList extends View {
   previewHere(item, cx) {
     if (!this.lookHinted) {
       this.lookHinted = true;
-      notify({ title: "Reading list", body: noQuickLook(this.platform, this.noSushi), level: "info", timeout: 6000 });
+      notify({ title: "Reading list", body: noQuickLook(this.noLook?.reason), level: "info", timeout: 6000 });
     }
     if (this.rail()) return this.toggleViewer({ item }, cx);
     this.choice = !previewShown(this.width, this.choice);
@@ -925,7 +1033,7 @@ export default class ReadingList extends View {
           const { item, size } = this.pvWant;
           let pv;
           try {
-            pv = await this.loadPreview(item, size);
+            pv = await this.loadPreview(item, size, cx);
           } catch (e) {
             pv = { id: itemKey(item), how: "error", error: String(e?.message ?? e) };
           }
@@ -946,7 +1054,7 @@ export default class ReadingList extends View {
 
   // What the preview shows for `item`. Another machine's text is read there (up to 1 MiB
   // through readTextFile); its images and thumbnails are made from a local copy.
-  async loadPreview(item, size) {
+  async loadPreview(item, size, cx) {
     const key = itemKey(item);
     const base = { id: key };
     if (item.url) return { ...base, how: "url" };
@@ -958,7 +1066,7 @@ export default class ReadingList extends View {
       if (on) return { ...base, how: "offline", error: String(e?.message ?? e) };
       throw e;
     }
-    let kind = previewKind(item, st.kind, this.platform);
+    let kind = previewKind(item, st.kind);
     const run = async (script, args, where = null) => {
       const r = await exec("sh", ["-c", script, "readlist", ...args], { on: where, timeout: 60000 });
       if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
@@ -976,7 +1084,7 @@ export default class ReadingList extends View {
       }
       if (typeof raw !== "string") raw = await run(HEAD_SCRIPT, [item.path], on);
       const text = previewText(raw, st.size);
-      if (text === null) kind = noThumb(this.platform);
+      if (text === null) kind = THUMB;
       else if (kind.how === "markdown") return { ...base, how: "markdown", text: stripThreads(text) };
       else {
         const t = theme();
@@ -985,27 +1093,47 @@ export default class ReadingList extends View {
           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } }) };
       }
     }
-    // No thumbnails on this platform: the type's icon.
-    if (kind.how === "icon") return { ...base, how: "icon", type: typeOf(item, st.kind) };
-    const name = cacheName(item.id, st, kind, size);
-    const how = kind.how === "image" ? "copy" : String(size);
+    // An image GPUI draws is copied as it is; anything else gets a thumbnail from the first
+    // handler that makes one, else its type's icon.
+    const list = kind.how === "thumb" ? await this.handlers() : [];
+    const name = cacheName(item.id, st, kind, size, list.find((h) => h.who === "user")?.tag ?? "");
+    const failedKey = `${key}|${name}`;
+    if (this.thumbFailed.has(failedKey)) return { ...base, ...this.thumbFailed.get(failedKey) };
+    let src = item.path, dir = `${appHome()}/${CACHE}`, rel = CACHE;
     if (on) {
       // Over ASK_BYTES, the copy waits for the person's Enter.
       if (needsAsk(st.size) && isStale(await this.copyMeta(item), st)) return { ...base, how: "big", size: st.size };
-      const copy = await this.fetchCopy(item, st);
+      src = await this.fetchCopy(item, st);
       const p = copyPaths(on, item.id, item.path);
-      const dir = `${appHome()}/${REMOTE_CACHE}/${p.thumbs}`;
-      await run(CACHE_SCRIPT, [copy, dir, `${dir}/${name}`, item.id, how]);
-      return { ...base, how: "image", src: `${REMOTE_CACHE}/${p.thumbs}/${name}`, thumb: kind.how === "thumb" };
+      dir = `${appHome()}/${REMOTE_CACHE}/${p.thumbs}`;
+      rel = `${REMOTE_CACHE}/${p.thumbs}`;
     }
-    const dir = `${appHome()}/${CACHE}`;
-    await run(CACHE_SCRIPT, [item.path, dir, `${dir}/${name}`, item.id, how]);
-    return { ...base, how: "image", src: `${CACHE}/${name}`, thumb: kind.how === "thumb" };
+    const image = { ...base, how: "image", src: `${rel}/${name}`, thumb: kind.how === "thumb" };
+    if (kind.how === "image") {
+      await run(CACHE_SCRIPT, [src, dir, `${dir}/${name}`, item.id, "copy"]);
+      return image;
+    }
+    let result = { how: "icon", type: typeOf(item, st.kind) };
+    for (const h of list) {
+      const r = await exec("sh", ["-c", CACHE_SCRIPT, "readlist", src, dir, `${dir}/${name}`, item.id, String(size), h.command, ...h.args], { timeout: (THUMB_SECONDS + 15) * 1000 })
+        .catch((e) => ({ code: null, stdout: "", stderr: String(e?.message ?? e) }));
+      const o = outcome(r);
+      if (o.status === "ok") return image;
+      if (o.status === "refused") this.refused(o.message, cx);
+      else if (o.status === "failed") {
+        result = { how: "error", error: o.message };
+        break;
+      }
+    }
+    // Not made: remembered until the file, its size here or the handlers change.
+    if (this.thumbFailed.size > 500) this.thumbFailed.clear();
+    this.thumbFailed.set(failedKey, result);
+    return { ...base, ...result };
   }
 
   // o: show the item in Finder or the file manager (another machine's: its local copy).
   // Revealing never opens or runs anything.
-  async reveal(item) {
+  async reveal(item, cx) {
     const files = words(this.platform).files;
     if (!item.path) {
       notify({ title: "Reading list", body: `A link has no file to show in ${files}; Enter opens it.`, level: "info" });
@@ -1017,8 +1145,8 @@ export default class ReadingList extends View {
       if (!c) return;
       path = c.path;
     }
-    const r = await this.launch("reveal", path);
-    if (r.code !== 0) notify({ title: "Reading list", body: `Couldn't show ${item.title} in ${files}: ${r.stderr.trim()}`, level: "error" });
+    const r = await this.launch("reveal", path, cx);
+    if (!r.ok) notify({ title: "Reading list", body: `Couldn't show ${item.title} in ${files}: ${r.message}`, level: "error" });
   }
 
   // Shift-D: take the item off the list, as `rl rm` does (removes its file, on its machine).
@@ -1099,6 +1227,8 @@ export default class ReadingList extends View {
       ? { dim, title: MENU_TITLE.unread, value: this.f.unread, options: [{ value: false, label: "All items" }, { value: true, label: "Unread only" }] }
       : dim === "sources"
         ? { dim, title: MENU_TITLE.sources, value: sentOn(this.state), options: [{ value: true, label: "Files Claude Code sends" }] }
+      : dim === "actions"
+        ? { dim, title: MENU_TITLE.actions, value: this.hs.state === "on", options: [{ value: false, label: "Built-in" }, { value: true, label: "Your handler" }] }
         : { dim, title: MENU_TITLE[dim], value: this.f[dim], options: [{ value: null, label: ALL[dim] }, ...options(pool, dim, { ...ctx, chosen: this.f[dim] })] });
     const rows = sections.reduce((n, s) => n + s.options.length, 0);
     const height = Math.min(440, 12 + sections.length * MENU_HEAD + rows * MENU_ROW);
@@ -1111,6 +1241,7 @@ export default class ReadingList extends View {
     if (!pk || pk.target !== this.copy || pk.n === this.pickN) return;
     this.pickN = pk.n;
     if (pk.dim === "sources") this.toggleSent(cx);
+    else if (pk.dim === "actions") this.setHandler(Boolean(pk.value), cx);
     else if (pk.dim in this.f) this.f = { ...this.f, [pk.dim]: pk.dim === "unread" ? Boolean(pk.value) : pk.value ?? null };
   }
 
@@ -1170,7 +1301,7 @@ export default class ReadingList extends View {
         // The list may have shrunk under the preview: keep the selection in view.
         if (cur) this.scroll.scroll_to_item(rows.indexOf(cur));
         break;
-      case "reveal": if (cur) cx.spawn(async (cx) => { await this.reveal(cur.item); cx.notify(); }); break;
+      case "reveal": if (cur) cx.spawn(async (cx) => { await this.reveal(cur.item, cx); cx.notify(); }); break;
       case "copy":
         if (cur) {
           cx.write_to_clipboard(copyText(cur.item));
@@ -1190,13 +1321,14 @@ export default class ReadingList extends View {
         break;
       case "filter":
         if (this.rail()) return false;
-        this.openMenu(["space", "agent", "type", ...(this.view === "list" ? ["unread", "sources"] : [])]);
+        this.openMenu(["space", "agent", "type", ...(this.view === "list" ? ["unread", "sources", "actions"] : [])]);
         break;
       case "viewer": this.toggleViewer(cur, cx); break;
       case "focus": this.focus(); break;
       case "install-rl": this.installRl(cx); break;
       case "refresh": this.refresh(cx); break;
       case "claude-files": this.toggleSent(cx); break;
+      case "handler": this.setHandler(null, cx); break;
       default: return false;
     }
     cx.notify();
@@ -1307,7 +1439,7 @@ export default class ReadingList extends View {
       case "icon":
         return v_flex().flex_1().min_h(0).p(14).gap(12).items_center().justify_center()
           .child(svg(`${ICONS}/${ICON[pv.type] ?? "file"}.svg`).size(48).text_color(t.muted))
-          .child(div().text_size(12).text_color(t.dim).child(this.platform === "linux" && !this.noSushi
+          .child(div().text_size(12).text_color(t.dim).child(this.platform === "linux" && !this.noLook
             ? "No thumbnail for this type here. Enter opens it; Space shows it in GNOME Sushi."
             : "No thumbnail for this type here. Enter opens it."));
       case "offline":
@@ -1375,6 +1507,11 @@ export default class ReadingList extends View {
     if (props()?.menu) return this.renderMenu(cx);
     if (this.role() === "viewer") return this.renderViewer(cx);
     this.takePick(cx);
+    // Another copy turned the person's handler on or off.
+    if (shared(HANDLER) !== this.handlerSeen) {
+      this.handlerSeen = shared(HANDLER);
+      this.checkHandler(cx);
+    }
     const t = theme();
     const rail = this.rail();
     const sidebar = this.role() === "sidebar";
@@ -1498,7 +1635,7 @@ export default class ReadingList extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { this.f = { ...this.f, unread: !this.f.unread }; cx.notify(); })
       .child("Unread");
-    const menuDims = ["space", "agent", "type", ...(this.view === "list" ? ["unread", "sources"] : [])];
+    const menuDims = ["space", "agent", "type", ...(this.view === "list" ? ["unread", "sources", "actions"] : [])];
     const filterIcon = div().id("rl-filter").flex_none().cursor_pointer().text_color(filtered ? t.accent : t.dim)
       .hover((s) => s.text_color(t.foreground))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
@@ -1554,6 +1691,21 @@ export default class ReadingList extends View {
           .child(this.installing === (banner.machine ?? "") ? "Installing…" : banner.machine ? `Install rl on ${banner.machine}` : "Install rl")))
         .child(link("rl-not-now", "Not now", false, () => (banner.machine ? this.dismissRemoteRl(banner.machine) : this.dismissRl()))));
 
+    // The person's handler is turned on but not used (changed, moved, gone, refused): why,
+    // with its path, and the buttons to confirm it as it is now or turn it off.
+    const hb = !rail ? handlerBanner(this.hs, this.handlerPath()) : null;
+    const handlerRow = () => v_flex().id("rl-handler-banner").mx(14).mb(8).px(10).py(9).gap(8).flex_none().rounded(8)
+      .border(1).border_color(t.border).bg(t.raised).text_size(12)
+      .child(div().text_color(t.foreground).child(hb.text))
+      .child(h_flex().gap(12).items_center()
+        .when(hb.confirm, (el) => el.child(div().id("rl-handler-use").flex_none().h(24).px(10).rounded(6).flex().items_center().cursor_pointer()
+          .bg(t.solid).text_color(t.solid_foreground).font_medium().hover((s) => s.opacity(0.9))
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .on_click((_e, cx) => { this.setHandler(true, cx); cx.notify(); })
+          .tooltip("Run your handler as it is now")
+          .child("Use it")))
+        .child(link("rl-handler-off", "Turn off", false, () => this.setHandler(false, cx))));
+
     // The `/` box.
     const findRow = h_flex().mx(14).mb(6).h(26).px(7).gap(6).flex_none().items_center().rounded(6)
       .border(1).border_color(this.typing ? t.accent : t.border).bg(t.background)
@@ -1576,7 +1728,10 @@ export default class ReadingList extends View {
       ? (wide ? ["↵ open", "␣ look", "p preview", "v viewer", "o reveal", "c copy", "/ find", "f filter", "d not done", "tab list"] : ["↵ open", "␣ look", "v view", "/ find", "d not done"])
       : (wide ? ["↵ open", "␣ look", "p preview", "v viewer", "o reveal", "c copy", "/ find", "f filter", "r read", "d done", "tab done", ...(this.remote.size ? ["R refresh"] : [])] : ["↵ open", "␣ look", "v view", "/ find", "r read", "d done"]);
     const hints = h_flex().h(24).px(16).flex_none().items_center().gap(10).text_size(10.5).text_color(t.dim).overflow_hidden()
-      .children(keyHints.map((s) => div().flex_none().child(s)));
+      .children(keyHints.map((s) => div().flex_none().child(s)))
+      // Which actions run: said only when it is the person's own handler.
+      .when(this.hs.state === "on", (el) => el.child(div().flex_1()).child(div().id("rl-handler-on").flex_none().text_color(t.accent)
+        .tooltip(`Enter, Space, o and thumbnails ask ${this.hs.path} first`).child("your handler")));
 
     const filtersEmpty = rows.length === 0 && filtered && !rail && this.pool().length > 0;
 
@@ -1598,6 +1753,7 @@ export default class ReadingList extends View {
       .on_key_down((e, cx) => this.keys(e, cx))
       .on_drop((e, cx) => this.dropped(e.paths, cx))
       .child(header)
+      .when(Boolean(hb), (el) => el.child(handlerRow()))
       .when(showBanner, (el) => el.child(bannerRow()))
       .when(!rail && !wide && active.length > 0, (el) => el.child(activeRow))
       .when(!rail && (this.finding || Boolean(this.f.text)), (el) => el.child(findRow))

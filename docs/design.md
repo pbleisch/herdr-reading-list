@@ -255,7 +255,7 @@ keyboard). A click on a row selects it and gives the list the keyboard; moving t
 never opens anything. A double-click opens, like Enter. Each key is also a mod command, so `keys.json` can bind it
 globally and scripts can drive it: `herdr-app do readlist.<command>` with `down`, `up`, `top`,
 `bottom`, `open`, `preview`, `pane`, `reveal`, `copy`, `read`, `done`, `undo`, `delete`, `view`,
-`find`, `filter`, `viewer`, `focus`, `install-rl` or `refresh`. A command reaches every shown copy; only the copy that had
+`find`, `filter`, `viewer`, `focus`, `install-rl`, `refresh`, `claude-files` or `handler` (4.7). A command reaches every shown copy; only the copy that had
 the keyboard last acts on it (`shared("readlist.keyboard")`, cleared when that copy closes), else
 the sidebar's.
 
@@ -347,8 +347,8 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
   new version removes the item's older ones, and items that leave the list lose theirs.
 - Text and markdown previews read the first 512 KiB with `head -c` (a file with a NUL byte gets a
   Quick Look thumbnail instead); a folder lists its first 200 entries, folders first.
-- Open is `exec("open", [path])`. Quick Look is `qlmanage -p "$1"` started in the background by
-  `sh -c` (path as `$1`), so the panel is not tied to the `exec` call and its 30 s limit (rows 26b
+- These calls are the built-in macOS handler, `handlers/macos.sh` (4.7). Open is `open "$path"`.
+  Quick Look is `qlmanage -p "$path"` started in the background, so the panel is not tied to the `exec` call and its 30 s limit (rows 26b
   and 29); the mod keeps the pid and Space again kills that pid, only while it is still `qlmanage`.
   Quick Look only draws a preview, so it is safe for every type, executables included. Enter on
   executable types (`.app`, `.command`, scripts) reveals in Finder instead of opening, as herdr-md
@@ -360,7 +360,7 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
 - Sizes from `on_size_change` are zoomed pixels; divide by `settings().zoom` before choosing a
   thumbnail size (herdr-md's note).
 
-**Linux.** `core/platform.js` picks the commands from `window().platform`; macOS keeps the calls
+**Linux.** The built-in handler (4.7) is picked by `window().platform`; macOS keeps the calls
 above unchanged, and every Linux program is optional (checked with `command -v`; when missing, the
 script exits 127 and says what to install, and the mod shows that in a toast).
 
@@ -377,8 +377,8 @@ script exits 127 and says what to install, and the mod shows that in a toast).
   Space again on the same item passes `close` true. With no Sushi (`ServiceUnknown`) or no
   `gdbus`, a one-time toast says so and Space shows or hides the in-pane preview instead (in the
   narrow rail, the `v` pane).
-- Thumbnails: none. Images GPUI draws are copied into the cache and shown as on macOS; HTML, PDF,
-  other images and binary files show their type's icon with "Enter opens it".
+- Thumbnails: none (the handler passes). Images GPUI draws are copied into the cache and shown as
+  on macOS; HTML, PDF, other images and binary files show their type's icon with "Enter opens it".
 - Paths reach D-Bus as GVariant string literals with every byte that is not unreserved
   percent-encoded, so no path can end the literal.
 
@@ -429,6 +429,50 @@ Items on another machine (a named machine in `machines()`, layout `ready`; `core
 - Shift-D removes the item file on its machine (`rm` through `exec(..., {on})`, the folder from the
   poll), then lists that machine again. The drop folder (3.5) is this Mac's only.
 
+### 4.7 Action handlers
+
+Open, reveal, the Space preview window and thumbnails (4.5) are handlers: programs the mod runs
+with the item. The platform's built-in one ships in the mod (`handlers/macos.sh`,
+`handlers/linux.sh`, POSIX `sh`, holding exactly the calls in 4.5); the person may put their own in
+front of it. Windows gets a built-in handler on the same interface next.
+
+- **Interface.** `HANDLER ACTION [ARG...] -- ITEM`, argv only. ITEM is the only item data and always
+  the last argument: an absolute path with its folders resolved (a remote item's fetched copy), or
+  an http(s) URL for `open-url`. Actions: `open`, `reveal`, `open-url`, `preview` (prints a token,
+  the Quick Look pid on macOS), `preview-close TOKEN same|other` (`same`: Space again on that item,
+  exit 0 when it closed, else the mod shows it again; `other`: Space on another item, before it is
+  shown; Sushi keeps its window, Quick Look is killed), `thumbnail SIZE OUT` (a PNG at OUT, in a
+  fresh folder the handler may use for scratch). Exit 0 done; 10 not handled; anything else an
+  error, its first stderr line toasted (`core/handlers.js` `outcome`). Copy (`c`) is the
+  clipboard, the same everywhere, so it is not an action.
+- **Order.** The person's handler (when on), then the built-in one, then the mod's fallback: the
+  browser (`cx.open_url`) for a link, the in-pane preview for Space (with a one-time toast giving
+  the built-in handler's stderr as the reason; it is not asked for a preview again), the type's icon
+  for a thumbnail. A failure stops the chain. Each run is one `exec` of
+  `sh bin/run-handler builtin|user ...` with a 15 s timeout (a thumbnail: `CACHE_SCRIPT` runs it with
+  a 30 s watchdog); the runner `exec`s the handler, so the timeout stops the handler itself.
+  Thumbnails carry the person's handler's hash prefix in their cache name, and a thumbnail that
+  failed or that nothing made is remembered per file version, so nothing is retried in a loop.
+- **Opt-in.** `~/.config/herdr-app/readlist/handler` (the app home's `readlist/`, outside the mod
+  folder) is never run because it exists. The `f` menu's Actions ("Built-in", "Your handler") and
+  `readlist.handler` run `run-handler check` and, when it passes, write `readlist/trust.json`
+  `{v: 1, handler: {path, sha256, at}}` (its real path and hash) with `writeTextFile`'s
+  compare-and-swap; off writes `handler: null`. Every copy reads `trust.json` before an action, and
+  checks the handler on start, every 30 s, after a refusal and when `shared("readlist.handler")`
+  changes (bumped on every switch).
+- **Checks** (`run-handler`, in the same shell that then `exec`s the handler): the location and
+  each link on the way are followed (at most 20); the file is regular, executable, owned by the
+  person and not group- or world-writable; every folder above it and above each link is owned by the
+  person or root and not group- or world-writable; its real path and SHA-256 (`sha256sum`, else
+  `shasum -a 256`) match `trust.json`. Otherwise it exits 11 with `readlist: why` and runs nothing;
+  the mod runs the built-in handler, toasts the reason once, and shows a banner with the path:
+  **Use it** (confirm the file as it is now) for a changed or moved handler, "Turn off" always.
+- **What is not trusted.** Item fields, inbox drops, other machines and transcripts never choose,
+  enable or change a handler; titles, notes and names never reach one; links reach one only as
+  http(s). The rule that Enter on a file that could run reveals it (4.5) holds before any handler
+  is asked. A process running as the person can swap the handler between the check and the run;
+  that is not a boundary the mod can draw.
+
 ## 5. Hand-off to a review mod
 
 Not built; it waits for a document-review mod (a pane that shows a markdown or HTML file and lets
@@ -453,6 +497,8 @@ herdr-reading-list/            laid out like a herdr-app home, so it can be shar
   mods/readlist/main.js, mod.json, icons/*.svg
   mods/readlist/core/          pure logic (item parse, sort, filters, state merge), node-testable
   mods/readlist/bin/rl         the POSIX sh producer; travels with the mod
+  mods/readlist/bin/run-handler  checks the person's handler, runs any handler with the item as one argument
+  mods/readlist/handlers/      the built-in action handlers (macos.sh, linux.sh; 4.7)
   keys.json                    cmd-shift-i (macOS) / ctrl-shift-i (Linux) open the popup (each platform merges its own, only where free)
   RECIPE.md, preview.png       the herdr.dev brief and screenshot
   skill/reading-list/SKILL.md  for agents: when to add, the rl commands, the zero-install fallback
@@ -505,7 +551,8 @@ Each one is useful on its own.
   string concatenation.
 - Trust: any local process can add items, and an item path can point anywhere. The mod only reads
   and opens (it never executes an item); opening an `.app` or a script with `open` would run it, so
-  Enter on executable types reveals them in Finder instead (4.5).
+  Enter on executable types reveals them in Finder instead (4.5). The person's own handler runs
+  only once they turn it on, and only as confirmed (4.7).
 
 ## 9. Settled calls
 

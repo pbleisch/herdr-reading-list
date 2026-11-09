@@ -5,3 +5,5 @@ mods/readlist/jsconfig.json
 mods/readlist/.cache/
 node_modules/
 .DS_Store
+# Private scratch folders of the handler tests (removed when they finish)
+test/.tmp/

@@ -20,6 +20,10 @@ running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shi
 | Linux | Supported: `xdg-open`, the file manager through the freedesktop `FileManager1` D-Bus call (`gdbus`), else `xdg-open` on the folder; the Space preview window needs GNOME Sushi, else the in-pane preview; no thumbnails (other types show their icon). |
 | Windows | Coming. |
 
+Each action (open, reveal, the Space preview window, thumbnails) is a handler, a program run with
+the item as a separate argument: one built in per platform, and in front of it, only once the
+person turns it on, their own `~/.config/herdr-app/readlist/handler`.
+
 ## What you see
 
 All colors are `theme()` names, so it follows the person's theme; sizes are logical pixels.
@@ -87,9 +91,10 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   where `d` or `u` brings it back); Shift-D deletes the item file (no undo); `/` opens a filter box
   (title, note, path; Enter or Down back to the list, Esc clears); `f` opens the filter menu (a
   250-wide popup with sections Space, Agent, Type and Show (All items / Unread only), each option with its count, a check on the chosen one, and in the list view a last section "Also add" with
-  one entry, "Files Claude Code sends", checked while that source is on; `j`/`k`, Enter); Shift-R lists
+  one entry, "Files Claude Code sends", checked while that source is on, then "Actions" with "Built-in"
+  and "Your handler", the one in use checked; `j`/`k`, Enter); Shift-R lists
   this machine and every other one again now. Each is also a command,
-  `readlist.<down|up|top|bottom|open|preview|pane|reveal|copy|read|done|undo|delete|view|find|filter|viewer|focus|install-rl|refresh|claude-files>`,
+  `readlist.<down|up|top|bottom|open|preview|pane|reveal|copy|read|done|undo|delete|view|find|filter|viewer|focus|install-rl|refresh|claude-files|handler>`,
   which only the copy that had the keyboard last acts on (else the sidebar's).
 - **Opening**: files open with `open` (Linux: `xdg-open`); executable items (`.app`, scripts,
   `.command`, anything with an execute bit, installers, and on Linux `.desktop`, `.AppImage`, `.run`,
@@ -116,6 +121,26 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   session is skipped quietly. It reads transcripts when a Claude Code agent comes, goes or changes
   state and every 30 s, while a copy of the list is shown; sends of a session that ended while no
   copy was shown are not added. Agents on other machines are not read.
+- **Handlers**: every action runs `sh mods/readlist/bin/run-handler` with separate arguments,
+  which runs the handler as `ACTION [ARG...] -- ITEM` (ITEM an absolute path with its folders
+  resolved, or an http(s) link for `open-url`; nothing else from the item): `open`, `reveal`,
+  `open-url`, `preview` (prints a token), `preview-close TOKEN same|other`, `thumbnail SIZE OUT`.
+  Exit 0 done, 10 not handled (the next handler, then the mod's fallback: the browser, the in-pane
+  preview, the type's icon), else an error whose first stderr line is toasted. 15 s per action,
+  30 s per thumbnail, one try each; a thumbnail that failed or that no handler made is not asked
+  for again until the file or the handlers change. The built-in ones are `handlers/macos.sh`
+  (`open`, `open -R`, `qlmanage -p` with its pid as the token and `kill` of that pid only while it
+  is `qlmanage`, `qlmanage -t`) and `handlers/linux.sh` (`xdg-open`, the FileManager1 call, GNOME
+  Sushi; `other` keeps Sushi's window; no thumbnails), picked by `window().platform`.
+  The person's own `~/.config/herdr-app/readlist/handler` is tried first only after they turn it
+  on (the `f` menu's Actions, `readlist.handler`); that records its real path and SHA-256 in
+  `~/.config/herdr-app/readlist/trust.json`. `run-handler` checks it before every run and exits 11
+  ("readlist: why") instead when it changed, now leads elsewhere, is not a regular executable file
+  owned by the person, is writable by group or others, or is below a folder (or a link's folder)
+  another user owns or group or others can write; the built-in handler then acts, a toast says why
+  once, and a banner under the header (styled like the rl banner) gives the path with **Use it**
+  (confirm the file as it is now, for changed or moved) and "Turn off". While it is on and used, the
+  key hints end with "your handler" (`accent`, right-aligned).
 - **Install rl**: the button (or `readlist.install-rl`) copies the mod's `bin/rl` to
   `~/.local/bin/rl` and toasts the result: installed, updated an older copy, already this version,
   `~/.local/bin` not on PATH, another `rl` first on PATH, or "another program called rl; left as it
@@ -163,9 +188,13 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   `state.json` (per item `read_at`, `done_at`, `undone_at`, `seen_mtime`, the inbox entries added,
   and `claude_files`: `on`, `since` and per session the latest send handled; written only by the
   mod with `writeTextFile`'s compare-and-swap).
-- `herdr`: `exec` (`sh -c` scripts with arguments, `open`, `qlmanage -p` and `-t`; with `on` for
-  other machines), `window` (`platform`: `macos`, `linux` or `windows`; `core/platform.js` picks
-  the commands from it), `hc` (`machine ls`, for `scp`'s target), `machines`, `readTextFile`,
+- `mods/readlist/handlers/`: the built-in action handlers, `macos.sh` and `linux.sh` (POSIX `sh`);
+  `mods/readlist/bin/run-handler`: checks the person's handler and runs any handler with the item
+  as one argument; `core/handlers.js`: the interface, the order handlers are tried in, the
+  opt-in record.
+- `herdr`: `exec` (`sh -c` scripts and `sh` files with arguments, with a `timeout`; with `on` for
+  other machines), `window` (`platform`: `macos`, `linux` or `windows`; `core/handlers.js` picks
+  the built-in handler from it), `hc` (`machine ls`, for `scp`'s target), `machines`, `readTextFile`,
   `writeTextFile`, `watchFolder`, `nextCommand`, `agents`, `spaces`, `panes`, `focused`, `theme`,
   `settings`, `layout`, `props`, `notify` (with an `action`), `appHome`, `run` (`pane.split`,
   `pane.close`, `pane.focus`), `shared`/`setShared` (`readlist.toasted`, `.quiet`, `.unread`,
@@ -177,7 +206,8 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   Herdr's shipped keys there).
 - Programs it runs: `sh`, `open`, `qlmanage` (macOS), `xdg-open`, `gdbus` (Linux, both optional), `stat`, `head`, `ls`, `cp`, `mv`, `rm`, `ps`/`kill`, `pgrep`, `grep`, `awk`, `sed`
   (only the Quick Look panel or thumbnail it started), `base64`, `hc`, `scp` and `shasum` (through
-  `rl`); on other machines, through Herdr, `sh`, `cat`, `stat`, `head`, `ls`, `base64`, `dd`, `rm`
+  `rl`), `id`, `find`, `readlink`, `sha256sum` or `shasum`, `od` (handlers), and the person's own
+  handler once they turn it on; on other machines, through Herdr, `sh`, `cat`, `stat`, `head`, `ls`, `base64`, `dd`, `rm`
   and `cp`/`mv` (installing `rl`). No network beyond Herdr's own connections and `scp`.
 
 ## Watch out
@@ -195,6 +225,13 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - The `rl` in the mod may lose its execute bit when copied by a tool: the mod runs it with `sh`.
 - A copy installed under another folder name must change `core/name.js` and the `readlist` in
   `keys.json` and in commands.
+- A handler is run with argv, the item last after `--`; never put item data in a shell string. A
+  handler's own `exit 10` means "not handled", so a built-in handler maps a program's status 10 to
+  1. Kill a background program by its pid and `wait "$pid" 2>/dev/null` (also for a killed
+  watchdog), or the shell's "Terminated" notice becomes the first line of the error.
+- The person's handler is trusted only as confirmed: check ownership, permissions, every folder
+  above it and the hash right before each run, in the same `sh` that then `exec`s it. Test
+  folders under Linux's `/tmp` fail those checks (it is world-writable), as they should.
 - Pick commands by `window().platform`, and keep each Linux program optional: check with
   `command -v` and print what to install. Text previews read the first 512 KiB; folders show
   200 entries.
@@ -236,6 +273,10 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - With no `rl` on PATH the banner shows; Install rl puts `~/.local/bin/rl` in place (mode 755) and
   says so; with a different file already at `~/.local/bin/rl` it leaves it and says so.
 - A file copied into `~/.local/state/reading-list/inbox/` appears as an item from "inbox".
+- With no handler turned on, Enter, Space and `o` do what the platform table says. A handler at
+  `~/.config/herdr-app/readlist/handler` that opens `.md` files and exits 10 otherwise, turned on
+  from the `f` menu, opens a markdown item its way and anything else as before; editing the handler
+  shows the banner and the built-in action runs until **Use it**; `chmod g+w` on it is refused.
 - With "Files Claude Code sends" off, a Claude Code agent's SendUserFile adds nothing. Turned on, a
   file the agent sends next appears as a `result` item with the caption as its note, naming that
   agent; sending a file that is already on the list leaves its item as it is.

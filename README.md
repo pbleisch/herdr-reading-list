@@ -23,6 +23,10 @@ when a program is missing, the list says which one instead of failing quietly. M
 images and folders preview in the pane on both. Items on other machines are listed from macOS and
 Linux alike.
 
+Each of these actions is a handler: a small program the list runs with the item. The table is what
+the built-in handlers do (`mods/readlist/handlers/macos.sh` and `linux.sh`); you can put your own
+in front of them, see [Your own handler](#your-own-handler).
+
 ## Install
 
 Ask your Herdr agent:
@@ -37,7 +41,8 @@ Linux), and run `herdr-app check ~/.config/herdr-app/mods/readlist`.
 
 What the mod does on your computer: it runs programs (`sh` scripts, its own `rl`, and on macOS
 `open` and `qlmanage` for Quick Look and thumbnails, on Linux `xdg-open` and `gdbus` for the file
-manager and GNOME Sushi), reads the files on the list wherever they are (and, only if
+manager and GNOME Sushi, and only if you turn it on, your own handler), reads the files on the list
+wherever they are (and, only if
 you turn on "Files Claude Code sends", Claude Code's session files and transcripts), and writes only
 its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin/rl`. On other
 machines Herdr reaches, it reads their list folder and the files on it through Herdr every 15 s,
@@ -138,7 +143,7 @@ In the list:
 | `d` | done (Tab shows the Done view, where `d` or `u` brings it back) |
 | Shift-D | delete the item from the list (like `rl rm`; the file stays) |
 | `/` | filter by title, note and path |
-| `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch |
+| `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch and Actions (built-in or your handler) |
 | Shift-R | list this machine and every other one again now |
 
 Each key is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can bind in
@@ -162,6 +167,89 @@ on that machine; to open, Quick Look or show an image, the file is first fetched
 twice. A machine that stops answering keeps its items, with an "offline" chip, until it answers
 again. Windows machines have no list.
 
+### Your own handler
+
+Enter, Space, `o` and the pane's thumbnails each run a handler. You can write your own, a program
+the list asks first, so a file opens the way you want on this computer; whatever it leaves alone
+falls through to the built-in handler. It is off until you turn it on.
+
+1. Write it at `~/.config/herdr-app/readlist/handler` (outside the mod's folder, so reinstalling the
+   mod keeps it), in any language, executable (`chmod 755`), owned by you, and not writable by
+   anyone else.
+2. Turn it on: `f`, then Actions, then **Your handler** (or `herdr-app do readlist.handler`). The
+   list checks it and says so; from then on the key hints end with "your handler".
+3. After you edit it, the list stops running it and shows a banner with its path; **Use it** turns
+   the new version on. **Turn off**, or Actions, then **Built-in**, goes back to the built-in
+   handler.
+
+The list runs it with separate arguments, never through a shell string; the item is always the
+last argument, right after `--`:
+
+| Arguments | When | What it does |
+|---|---|---|
+| `open -- PATH` | Enter | open the file or folder |
+| `reveal -- PATH` | `o`, and Enter on a file that could run | show it in the file manager |
+| `open-url -- URL` | Enter on a link (http and https only) | open the link |
+| `preview -- PATH` | Space | show a preview window; may print one word (a token, such as a pid) on stdout |
+| `preview-close TOKEN same\|other -- PATH` | Space while its preview is open | `same`: Space again on that item, close it (exit 0 when it did; otherwise the list shows it again). `other`: Space on another item; close it, or keep the window for the next preview |
+| `thumbnail SIZE OUT -- PATH` | the pane shows a file it cannot draw | write a PNG about SIZE pixels wide to OUT (its folder is yours for scratch files) |
+
+Exit 0 when done, 10 for "not handled" (the built-in handler runs, then the list's own fallback:
+the browser for a link, the preview in the pane for Space, the type's icon for a thumbnail), and
+anything else for an error: the first line of stderr shows in a toast. The list waits 15 s for an
+action and 30 s for a thumbnail, then stops it, so start long-running programs in the background.
+PATH is an absolute path with its folders resolved; for another machine's item it is the copy
+fetched to this computer. More arguments may come in later versions, so match on the action and
+take the item from the end.
+
+An example that opens markdown in VS Code and leaves everything else to the built-in handler:
+
+```sh
+#!/bin/sh
+# ~/.config/herdr-app/readlist/handler
+action=$1
+for item; do :; done   # the item: the last argument
+case $action in
+open)
+	case $item in
+	*.md | *.markdown) exec code "$item" ;;
+	esac
+	;;
+esac
+exit 10   # not handled: the built-in handler does it
+```
+
+## Security
+
+The reading list shows files that agents, tools and other machines put on it, so nothing on the
+list is trusted to run anything.
+
+- **Never trusted:** everything that comes with an item: paths, URLs, titles, notes, who added it,
+  machine names, files dropped in `inbox/`, items on other machines, and Claude Code transcripts.
+  None of it can choose, turn on or change a handler. A handler gets only the item's path (absolute,
+  its folders resolved) or an http or https link, as one argument after `--`; titles and notes never
+  reach it. Enter on a file that could run (an app, a script, an installer) asks for `reveal`, not
+  `open`.
+- **Off until you turn it on:** your handler runs only after you turn it on with the `f` menu or
+  `readlist.handler`, never because a file exists. Turning it on records its real path and its
+  SHA-256 in `~/.config/herdr-app/readlist/trust.json`. Before each run (`mods/readlist/bin/run-handler`)
+  the list checks it again; if the file changed, was replaced, or the location now leads elsewhere,
+  it is not run, the banner asks you to confirm it (showing the path), and the built-in handler acts
+  meanwhile.
+- **Refused:** a handler that is not a regular executable file, is not owned by you, is writable by
+  group or others, or sits below a folder (its own, any above it, or one a link passes through) that
+  another user owns or that group or others can write. A link is followed, and its target must pass
+  the same checks.
+- **Trusted:** the mod's own files (`main.js`, `handlers/`, `bin/`), like any installed mod, and your
+  handler as you confirmed it. The built-in handlers ship in the mod and are replaced when it is
+  reinstalled; do not edit them, write your own handler instead.
+- **This computer only:** handlers run here, never on another machine; another machine's file is
+  fetched first and the handler gets the local copy.
+- **Bounded:** each run has a time limit (15 s, 30 s for a thumbnail), runs once (a failure is shown,
+  never tried again in a loop), and an error is a short toast, not a crash.
+- **Not a boundary:** a program running as you can change your handler, or anything else you own, so
+  these checks protect you from the list's content and from other users, not from your own account.
+
 ## Uninstall
 
 ```sh
@@ -169,14 +257,14 @@ rm -rf ~/.config/herdr-app/mods/readlist
 ```
 
 Then remove the `cmd-shift-i` (or `ctrl-shift-i`) line from your `~/.config/herdr-app/keys.json` and any `readlist`
-block from your layouts. If you installed `rl`, delete `~/.local/bin/rl` (on each machine you
+block from your layouts, and `~/.config/herdr-app/readlist/` if you wrote your own handler. If you installed `rl`, delete `~/.local/bin/rl` (on each machine you
 installed it on). Your list stays in
 `~/.local/state/reading-list/` until you delete that folder too.
 
 ## Develop
 
 ```sh
-npm test          # node tests for mods/readlist/core and the scripts; rl under sh and dash
+npm test          # node tests for mods/readlist/core, the handlers and the scripts; rl under sh and dash
 bin/install-dev   # copy the mod into Herdr, merge keys, link rl, add the list to a cloned layout
 ```
 

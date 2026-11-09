@@ -2,12 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeItem } from "../mods/readlist/core/items.js";
 import {
-  WIDE, TEXT_BYTES, FOLDER_ENTRIES, QL_SECONDS, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT,
+  WIDE, TEXT_BYTES, FOLDER_ENTRIES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT,
   previewShown, previewKind, thumbSize, cacheName, parseStat, previewText, stripThreads, parseFolder, copyText,
 } from "../mods/readlist/core/preview.js";
 
@@ -50,6 +50,9 @@ test("cacheName keys the file version and keeps an image's extension", () => {
   const st = { kind: "f", mtime: 1700000000, size: 42 };
   assert.equal(cacheName("0123456789abcdef", st, { how: "image", ext: "jpg" }, 800), "0123456789abcdef-1700000000-42.jpg");
   assert.equal(cacheName("0123456789abcdef", st, { how: "thumb" }, 1600), "0123456789abcdef-1700000000-42-1600.png");
+  // Made with the person's handler asked first: its tag, so turning it on or off makes them again.
+  assert.equal(cacheName("0123456789abcdef", st, { how: "thumb" }, 800, "0a1b2c3d4e5f"), "0123456789abcdef-1700000000-42-800-0a1b2c3d4e5f.png");
+  assert.equal(cacheName("0123456789abcdef", st, { how: "image", ext: "png" }, 800, "0a1b2c3d4e5f"), "0123456789abcdef-1700000000-42.png");
 });
 
 test("STAT1_SCRIPT and parseStat describe a path", () => {
@@ -116,36 +119,7 @@ test("CACHE_SCRIPT is safe when two copies of the mod make one image at once", a
   assert.deepEqual(readdirSync(cache), [`${id}-1-1.png`]);
 });
 
-test("CACHE_SCRIPT makes a Quick Look thumbnail (macOS)", { skip: process.platform !== "darwin" }, () => {
-  const dir = mkdtempSync(join(tmpdir(), "rl-pv-"));
-  const cache = join(dir, ".cache");
-  const src = join(dir, "page one.html");
-  writeFileSync(src, "<h1 style='color:red'>Hello</h1>");
-  const out = join(cache, "0123456789abcdef-1-1-800.png");
-  sh(CACHE_SCRIPT, src, cache, out, "0123456789abcdef", "800");
-  assert.ok(existsSync(out));
-  assert.deepEqual(readdirSync(cache), ["0123456789abcdef-1-1-800.png"]);
-});
-
-test("CACHE_SCRIPT stops a Quick Look that never returns, and says there is no thumbnail", () => {
-  const dir = mkdtempSync(join(tmpdir(), "rl-pv-"));
-  const bin = join(dir, "bin");
-  mkdirSync(bin);
-  // A stand-in qlmanage that hangs, as the real one does on a file it has no thumbnail for.
-  writeFileSync(join(bin, "qlmanage"), "#!/bin/sh\nexec sleep 600\n", { mode: 0o755 });
-  const src = join(dir, "x.bin");
-  writeFileSync(src, Buffer.from([0, 1]));
-  const cache = join(dir, ".cache");
-  const script = CACHE_SCRIPT.replace(`sleep ${QL_SECONDS};`, "sleep 1;");
-  assert.notEqual(script, CACHE_SCRIPT);
-  const started = Date.now();
-  assert.throws(
-    () => execFileSync("sh", ["-c", script, "readlist", src, cache, join(cache, "0123456789abcdef-1-1-800.png"), "0123456789abcdef", "800"],
-      { encoding: "utf8", stdio: "pipe", env: { PATH: `${bin}:/usr/bin:/bin` } }),
-    /Quick Look has no thumbnail for this file/);
-  assert.ok(Date.now() - started < 8000, "returns soon after the watchdog");
-  assert.deepEqual(readdirSync(cache), [], "no temporary folder left");
-});
+// Thumbnails through a handler: test/handlers.test.mjs.
 
 test("copyText is the path, or the URL", () => {
   assert.equal(copyText(item()), "/tmp/plan.md");

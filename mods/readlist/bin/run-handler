@@ -1,0 +1,206 @@
+#!/bin/sh
+# Runs an action handler for the reading list, and checks the person's own handler before it
+# runs. The mod calls it with sh (core/handlers.js); every argument is a separate argv entry.
+#
+#   run-handler check LOCATION
+#     prints "ok<TAB>REAL PATH<TAB>SHA-256", "missing" or "refused<TAB>why".
+#   run-handler user LOCATION REAL SHA256 KIND ITEM ACTION [ARG...]
+#     runs the person's handler only when the check passes and LOCATION still leads to REAL,
+#     whose contents still hash to SHA256 (what the person turned on); else exits 11 with
+#     "readlist: why" on stderr and runs nothing.
+#   run-handler builtin FILE KIND ITEM ACTION [ARG...]
+#     runs a built-in handler (shipped in the mod's handlers/) with sh.
+#
+# Either way the handler gets `ACTION [ARG...] -- ITEM`: ITEM is an absolute path with its
+# folders resolved (KIND path) or an http or https URL (KIND url), and nothing else from the
+# item. The handler replaces this shell (exec), so a time limit on the call stops the
+# handler itself.
+#
+# The check follows LOCATION and every link on the way. The file must be a regular,
+# executable file owned by this user; it and every folder above it (and above each link)
+# must be owned by this user or root and not writable by group or others.
+
+set -u
+me=$(id -u)
+
+no() {
+	printf 'readlist: %s\n' "$1" >&2
+	exit 11
+}
+
+# $1 is owned by this user (or, with $2 = any, also by root) and nobody else may write it.
+own() {
+	if [ "$2" = any ]; then
+		o=$(find "$1" -prune \( -user "$me" -o -user 0 \) ! -perm -g+w ! -perm -o+w -print 2>/dev/null)
+	else
+		o=$(find "$1" -prune -user "$me" ! -perm -g+w ! -perm -o+w -print 2>/dev/null)
+	fi
+	[ -n "$o" ]
+}
+
+# Every folder from $1 (a resolved folder) up to / passes `own any`; else sets why.
+dirs() {
+	q=$1
+	while :; do
+		own "$q" any || {
+			why="$q can be changed by another user"
+			return 1
+		}
+		[ "$q" = / ] && return 0
+		q=$(dirname -- "$q")
+	done
+}
+
+# The folder $1 is in, resolved; fails when it is gone.
+folder() {
+	CDPATH='' cd -P -- "$(dirname -- "$1")" 2>/dev/null && pwd -P
+}
+
+# Checks the handler at $1: sets real (its real path) and sha, or why (and missing=1 when
+# there is nothing there).
+check() {
+	missing=0
+	p=$1
+	n=0
+	if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+		missing=1
+		why="there is no handler at $1"
+		return 1
+	fi
+	while [ -L "$p" ]; do
+		n=$((n + 1))
+		[ $n -le 20 ] || {
+			why="$1 is a loop of links"
+			return 1
+		}
+		d=$(folder "$p") || {
+			why="the folder of $p is gone"
+			return 1
+		}
+		dirs "$d" || return 1
+		t=$(readlink "$p") || {
+			why="cannot read the link $p"
+			return 1
+		}
+		case $t in /*) p=$t ;; *) p=$d/$t ;; esac
+	done
+	[ -e "$p" ] || {
+		why="$1 leads to $p, which does not exist"
+		return 1
+	}
+	d=$(folder "$p") || {
+		why="the folder of $p is gone"
+		return 1
+	}
+	real=${d%/}/${p##*/}
+	[ -f "$real" ] || {
+		why="$real is not a regular file"
+		return 1
+	}
+	own "$real" me || {
+		why="$real is not yours alone (another user owns it, or group or others can write it)"
+		return 1
+	}
+	dirs "$d" || return 1
+	[ -x "$real" ] || {
+		why="$real is not executable (chmod +x)"
+		return 1
+	}
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha=$(sha256sum <"$real")
+	else
+		sha=$(shasum -a 256 <"$real" 2>/dev/null)
+	fi
+	sha=${sha%% *}
+	case $sha in '' | *[!0-9a-f]*)
+		why="cannot hash $real (it needs sha256sum or shasum)"
+		return 1
+		;;
+	esac
+	[ ${#sha} = 64 ] || {
+		why="cannot hash $real"
+		return 1
+	}
+}
+
+# Sets item: the absolute path $2 with its folders resolved (KIND $1 = path), or the
+# http(s) URL $2 (KIND url).
+item() {
+	case $1 in
+	url)
+		case $2 in
+		http://* | https://*) item=$2 ;;
+		*)
+			echo "readlist: only http and https links go to a handler" >&2
+			exit 2
+			;;
+		esac
+		;;
+	path)
+		case $2 in /*) ;; *)
+			printf 'readlist: not an absolute path: %s\n' "$2" >&2
+			exit 2
+			;;
+		esac
+		p=$2
+		while [ "$p" != / ] && [ "${p%/}" != "$p" ]; do p=${p%/}; done
+		if [ "$p" = / ]; then
+			item=/
+			return
+		fi
+		b=${p##*/}
+		dp=${p%/*}
+		[ -n "$dp" ] || dp=/
+		# The trailing "." keeps a folder name that ends in a newline whole.
+		d=$(CDPATH='' cd -P -- "$dp" 2>/dev/null && pwd -P && echo .) || {
+			printf 'readlist: its folder is gone: %s\n' "$dp" >&2
+			exit 1
+		}
+		d=${d%??}
+		item=${d%/}/$b
+		;;
+	*)
+		echo "readlist: unknown item kind" >&2
+		exit 2
+		;;
+	esac
+}
+
+mode=${1-}
+[ $# -gt 0 ] && shift
+case $mode in
+check)
+	[ $# -eq 1 ] || exit 2
+	if check "$1"; then
+		printf 'ok\t%s\t%s\n' "$real" "$sha"
+	elif [ $missing = 1 ]; then
+		echo missing
+	else
+		printf 'refused\t%s\n' "$why"
+	fi
+	;;
+user)
+	[ $# -ge 6 ] || exit 2
+	loc=$1 want=$2 sum=$3
+	shift 3
+	check "$loc" || no "$why"
+	[ "$real" = "$want" ] || no "$loc now leads to $real, not the $want you turned on"
+	[ "$sha" = "$sum" ] || no "$real changed since you turned it on"
+	item "$1" "$2"
+	shift 2
+	a=$1
+	shift
+	exec "$real" "$a" "$@" -- "$item"
+	;;
+builtin)
+	[ $# -ge 4 ] || exit 2
+	f=$1
+	shift
+	item "$1" "$2"
+	shift 2
+	a=$1
+	shift
+	exec sh "$f" "$a" "$@" -- "$item"
+	;;
+*) exit 2 ;;
+esac
