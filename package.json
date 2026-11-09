@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/ && sh test/rl.test.sh && RL_SHELL=dash sh test/rl.test.sh"
+    "test": "node --test \"test/*.test.mjs\" && sh test/rl.test.sh && RL_SHELL=dash sh test/rl.test.sh"
   }
 }

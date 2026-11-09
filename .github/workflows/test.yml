@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 24
       - name: Node tests
-        run: node --test test/
+        run: node --test "test/*.test.mjs"
       - name: rl tests (sh)
         run: sh test/rl.test.sh
       - name: rl tests (dash)
