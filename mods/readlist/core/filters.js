@@ -1,8 +1,8 @@
 // Filters: by space, by agent, by type, unread only, and the `/` box (title, note, path).
 // Pure functions, shared by the mod and the node tests. See docs/design.md 4.2 and 4.3.
 
-import { typeOf } from "./items.js";
-import { who } from "./state.js";
+import { typeOf, itemKey } from "./items.js";
+import { who, byAddress } from "./state.js";
 
 export const NO_FILTER = Object.freeze({ space: null, agent: null, type: null, unread: false, text: "" });
 
@@ -12,10 +12,11 @@ export const TYPE_LABEL = {
 };
 
 // The value an item has for a filter dimension. "" means none: no space recorded (an item
-// from the inbox or cron), or no adder at all.
+// from the inbox or cron), or no adder at all. Another machine's space and terminal ids
+// carry its name (`devbox/sp1`), as Herdr's spaces() and agents() give them.
 export function keyOf(item, dim, fsKind) {
-  if (dim === "space") return item.by.space ?? "";
-  if (dim === "agent") return item.by.terminal ? `t:${item.by.terminal}` : `f:${item.by.from ?? ""}`;
+  if (dim === "space") return item.by.space ? (item.machine ? `${item.machine}/${item.by.space}` : item.by.space) : "";
+  if (dim === "agent") return item.by.terminal ? `t:${byAddress(item)}` : `f:${item.by.from ?? ""}`;
   if (dim === "type") return typeOf(item, fsKind);
   throw new Error(`unknown filter ${dim}`);
 }
@@ -28,13 +29,13 @@ export function textMatches(item, text) {
   return words.every((w) => hay.includes(w));
 }
 
-// The items a filter lets through. `fs` maps a path to its STAT kind letter (for the type).
+// The items a filter lets through. `fs` maps an item key to its STAT kind letter (for the type).
 // The unread toggle is applied to rows (filterRows), since read is the state's business.
 export function applyFilters(items, f, fs = {}) {
   return items.filter((i) =>
     (f.space === null || keyOf(i, "space") === f.space) &&
     (f.agent === null || keyOf(i, "agent") === f.agent) &&
-    (f.type === null || keyOf(i, "type", i.path ? fs[i.path] : null) === f.type) &&
+    (f.type === null || keyOf(i, "type", i.path ? fs[itemKey(i)] : null) === f.type) &&
     textMatches(i, f.text));
 }
 
@@ -52,7 +53,7 @@ export function options(items, dim, { fs = {}, spaces = [], agents = [], chosen 
   const seen = new Map();
   const newest = [...items].sort((a, b) => Date.parse(b.added_at) - Date.parse(a.added_at));
   for (const i of newest) {
-    const value = keyOf(i, dim, i.path ? fs[i.path] : null);
+    const value = keyOf(i, dim, i.path ? fs[itemKey(i)] : null);
     const had = seen.get(value);
     if (had) had.count++;
     else seen.set(value, { value, label: labelOf(i, dim, value, spaces, agents), count: 1 });

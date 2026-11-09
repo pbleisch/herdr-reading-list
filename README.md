@@ -23,8 +23,12 @@ checks the mod. To do it by hand, copy the `mods/readlist` folder there yourself
 
 What the mod does on your Mac: it runs programs (`sh` scripts, `open`, `qlmanage` for Quick Look
 and thumbnails, and its own `rl`), reads the files on the list wherever they are, and writes only
-its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin/rl`. It does not
-use the network (a URL item opens in your browser).
+its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin/rl`. On other
+machines Herdr reaches, it reads their list folder and the files on it through Herdr every 15 s,
+copies a file into its `.cache/` when you open or preview it, removes an item file on Shift-D, and
+writes `~/.local/bin/rl` there only when you press Install rl on that machine. It uses no network
+of its own beyond Herdr's connections, and `scp` for a file over 5 MiB that `hc exec` could not
+fetch (a URL item opens in your browser).
 
 Then open it:
 
@@ -39,7 +43,9 @@ Then open it:
 `sh`, no dependencies). While it is not on your PATH, the list shows a banner with an **Install rl**
 button (also `herdr-app do readlist.install-rl`): it copies `rl` to `~/.local/bin/rl`, tells you if
 `~/.local/bin` is not on your PATH, and never replaces a different program called `rl`. "Not now"
-hides the banner.
+hides the banner. The same banner offers **Install rl on devbox** for another machine whose list
+it reads and that has no `rl`, so agents there can add to the list; it installs to
+`~/.local/bin/rl` on that machine.
 
 Agents without `rl` can still add items by writing a small JSON file; see
 [skill/reading-list/SKILL.md](skill/reading-list/SKILL.md).
@@ -90,6 +96,7 @@ In the list:
 | Shift-D | delete the item from the list (like `rl rm`; the file stays) |
 | `/` | filter by title, note and path |
 | `f` | filter menu: space, agent, type, unread only |
+| Shift-R | list this machine and every other one again now |
 
 Each key is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can bind in
 `keys.json`. Global: `cmd-shift-i` opens the popup.
@@ -99,6 +106,17 @@ text and code highlighted, images, a Quick Look thumbnail of HTML, PDF and anyth
 can draw, a folder's entries. Narrower, `p` shows it below the list. A read item whose file changed
 since shows a "changed" chip. Executable items (apps, scripts) are shown in Finder, never opened.
 
+### Other machines
+
+An agent on another machine Herdr reaches (one in `hc machine ls`) runs `rl add` there; the item
+goes in that machine's own list folder, and the list here shows it with the machine's name. The
+list reads each machine every 15 s (Shift-R reads them now). Markdown and text previews are read
+on that machine; to open, Quick Look or show an image, the file is first fetched into the mod's
+`.cache/`, and fetched again when it changes there. The row then says "copy from devbox, fetched
+18:42"; edits to the copy stay on your Mac. A file over 50 MiB is fetched only when you press Enter
+twice. A machine that stops answering keeps its items, with an "offline" chip, until it answers
+again. Windows machines have no list.
+
 ## Uninstall
 
 ```sh
@@ -106,7 +124,8 @@ rm -rf ~/.config/herdr-app/mods/readlist
 ```
 
 Then remove the `cmd-shift-i` line from your `~/.config/herdr-app/keys.json` and any `readlist`
-block from your layouts. If you installed `rl`, delete `~/.local/bin/rl`. Your list stays in
+block from your layouts. If you installed `rl`, delete `~/.local/bin/rl` (on each machine you
+installed it on). Your list stays in
 `~/.local/state/reading-list/` until you delete that folder too.
 
 ## Develop

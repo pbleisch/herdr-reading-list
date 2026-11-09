@@ -254,13 +254,13 @@ keyboard). A click on a row selects it and gives the list the keyboard; moving t
 never opens anything. A double-click opens, like Enter. Each key is also a mod command, so `keys.json` can bind it
 globally and scripts can drive it: `herdr-app do readlist.<command>` with `down`, `up`, `top`,
 `bottom`, `open`, `preview`, `pane`, `reveal`, `copy`, `read`, `done`, `undo`, `delete`, `view`,
-`find`, `filter`, `viewer` or `focus`. A command reaches every shown copy; only the copy that had
+`find`, `filter`, `viewer`, `focus`, `install-rl` or `refresh`. A command reaches every shown copy; only the copy that had
 the keyboard last acts on it (`shared("readlist.keyboard")`, cleared when that copy closes), else
 the sidebar's.
 
 Increment 1 has `j`/`k` and arrows, `g`/`G` and Home/End, Enter, Space (the Quick Look panel), `r`,
 `d`, `u`, Shift-D (delete) and Tab (switches between the list and the Done view); increment 2 adds
-`p`, `o` and `c`; increment 3 adds `/`, `f` and `v`. The full set:
+`p`, `o` and `c`; increment 3 adds `/`, `f` and `v`; increment 4 adds Shift-R. The full set:
 
 | Key | Action |
 |---|---|
@@ -269,10 +269,10 @@ Increment 1 has `j`/`k` and arrows, `g`/`G` and Home/End, Enter, Space (the Quic
 | Space | macOS Quick Look panel (`qlmanage -p`, row 29), a toggle like Finder's; does not mark read. A link has no Quick Look: a notice says Enter opens it |
 | `p` | show or hide the preview in the pane (4.2) |
 | `o` | reveal in Finder (`open -R`); a link has nothing to reveal: a notice says so |
-| `R` | review in the review mod (5; not built yet) |
+| Shift-R | list this machine and every other machine again now (4.6) |
 | `r` | toggle read / unread |
 | `d` | done (hidden; Done view lists it); in the Done view `d` or `u` brings it back |
-| Shift-D | delete: removes the item file, as `rl rm` does, in the list and the Done view; selection moves to the next item. No confirmation; `rl add` puts it back |
+| Shift-D | delete: removes the item file (on its machine), as `rl rm` does, in the list and the Done view; selection moves to the next item. No confirmation; `rl add` puts it back. Not while its machine is offline |
 | Tab | switch between the list and the Done view |
 | `a` | go to the agent that added it (`agent.focus {terminal}`) |
 | `c` | copy the path (a link's URL), with a short notice |
@@ -288,15 +288,17 @@ on a stale read:
   "inbox": { "<name>": 1794205592 } }
 ```
 
-Local items are keyed by id; remote ones (increment 4) will be keyed `<machine>/<id>`, the address
-form Herdr uses. The mod writes times with milliseconds (`toISOString()`).
+Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address form Herdr uses
+(`core/items.js` `itemKey`). The mod writes times with milliseconds (`toISOString()`).
 
 - **Read** when `read_at` is at or after the item's `added_at`, so a re-add makes it unread again.
 - **Done** when the latest done mark, the item's own `done_at` (`rl done`) or the state's, is at or
   after both `added_at` and the state's `undone_at`. The mod sets `done_at` or `undone_at` and
   clears the other, so the person's latest action wins over their earlier ones.
 - `rl ls` applies the same rules, comparing times to the second.
-- Entries for items no longer on the list (`rl rm`) are pruned once their last mark is 30 days old.
+- Entries for items no longer on the list (`rl rm`) are pruned once their last mark is 30 days old;
+  a remote machine's entries only once this copy has that machine's listing, so an offline
+  machine's items keep their state.
 - `seen_mtime` is the file's mtime (epoch seconds) when it was read (Enter, `r`), so a row can say
   "changed" when the file changed since; marking unread forgets it. `inbox` is the drop folder's
   record (3.5).
@@ -323,11 +325,11 @@ form Herdr uses. The mod writes times with milliseconds (`toISOString()`).
 
 | Type | In-pane preview | Enter (open) |
 |---|---|---|
-| Markdown (`.md`, `.markdown`) | `TextView.markdown`, scrollable, links open through `on_link_click` (row 13); omd's thread block stripped | default app (`open`); `R` for the review mod |
+| Markdown (`.md`, `.markdown`) | `TextView.markdown`, scrollable, links open through `on_link_click` (row 13); omd's thread block stripped | default app (`open`); later, Review in the review mod (5) |
 | Plain text, code, JSON, CSV, logs | readonly `Editor` with the extension's language (row 14), first 1 MiB (row 5) | default app |
 | Images (PNG, JPEG, GIF, SVG, WebP) | `image()` of a copy in the mod's cache (rows 15-17), scaled to the pane | Preview (default app) |
 | Other images (HEIC, TIFF, PSD) | Quick Look thumbnail (row 28) | default app |
-| HTML | Quick Look thumbnail at the pane's width, which keeps the CSS (A.3); a "Basic" toggle uses `TextView.html` (no CSS) | default browser (`open`); `R` for the review mod's full render |
+| HTML | Quick Look thumbnail at the pane's width, which keeps the CSS (A.3); a "Basic" toggle uses `TextView.html` (no CSS) | default browser (`open`); later, the review mod's full render (5) |
 | PDF | Quick Look thumbnail of page 1 | Preview |
 | Office, Keynote, video, anything with a Quick Look generator | Quick Look thumbnail | default app |
 | Folder | its listing (`ls`), first 200 entries | Finder |
@@ -359,30 +361,57 @@ form Herdr uses. The mod writes times with milliseconds (`toISOString()`).
 
 ### 4.6 Remote items
 
-Items on another machine (`machine` non-null in `machines()`, layout `ready`):
+Items on another machine (a named machine in `machines()`, layout `ready`; `core/remote.js`):
 
-- **Listing:** poll every 15 s while any copy is alive, and on demand (pane focused, `R` key):
-  `exec("sh", ["-c", "for f in ~/.local/state/reading-list/items/*.json; do cat \"$f\"; printf '\\n\\036\\n'; done"], {on: m})`
-  (row 8): every item file in one call, split on the record-separator line. No `watchFolder`
-  remotely (row 4).
-- **Preview text:** `readTextFile(path, {on: m})` (row 5).
-- **Open, image, thumbnail:** fetch a local copy first, into
-  `~/.config/herdr-app/mods/readlist/.cache/<machine>/<id>/<name>` (keeps the original file name so
-  `open` picks the right app, and is loadable by `image()`), using herdr-workbench's proven route
-  (row 26): `base64` on the remote machine through `exec(..., {on})`, the text written locally,
-  decoded with `base64 -d`. Above that route's size cap, a local `sh -c 'hc exec --on "$1" cat --
-  "$2" > "$3.tmp" && mv "$3.tmp" "$3"'` (assumed binary-safe) or `scp`. Then everything in 4.5 runs
-  on the copy.
-- The row and preview say "copy from server, fetched 18:42"; the copy is re-fetched when the remote
-  `mtime` changes. Files over 50 MiB ask first. Edits to the copy do not go back; the preview says
-  so, and "Review" sends the remote path to the review mod, if that mod reads remote files itself.
-- Unreachable machine: its items stay listed from the last poll with an "offline" chip.
+- **Listing:** every 15 s while a copy of the mod is alive, and on Shift-R, one
+  `exec("sh", ["-c", POLL_SCRIPT, "readlist", ...paths], {on: m})` (row 8) per machine. It prints
+  `dir<TAB>` the list folder (`$READING_LIST_DIR` or `~/.local/state/reading-list` in that
+  machine's environment), `rl<TAB>` the `rl` status line (as here, 3.1), a stat line
+  (`kind mtime size`) for each path of the last listing, then each `items/*.json` after a
+  record-separator line (`\n\036\n`), and a last record `end`. The mod splits on the separator
+  line. Output without the `end` record (cut at 8 MiB, killed) is not a listing. New items' files
+  are stat-ed by one more poll at once, so steady state is one exec per machine per poll. The poll
+  writes nothing; a machine with no list folder lists nothing. No `watchFolder` remotely (row 4).
+  The poll times out after 20 s.
+- **Offline:** a poll that fails (the exec rejects, times out or ends early) marks the machine
+  offline; its items stay from the last poll that answered, with an "offline" chip, until a poll
+  answers again. A machine whose layout is `unavailable` is offline the same way. A machine that is
+  gone from `machines()` is dropped. A machine without `sh` (Windows: exec says "cannot start sh")
+  is "unsupported", not offline, and is not polled again until it reconnects. All of this is in
+  memory, per copy: after a restart an offline machine shows nothing until it answers.
+- **Preview text:** `readTextFile(path, {on: m})` (row 5) up to 1 MiB (the first 512 KiB shown, as
+  here); larger, or text `readTextFile` cannot read, through `head` on that machine. Folders are
+  listed there.
+- **Open, Space, `o`, image, thumbnail:** fetch a local copy first, into
+  `mods/readlist/.cache/remote/<machine>/<id>/copy/<name>` (keeps the original file name so `open`
+  picks the right app; under the app home so `image()` loads it), with
+  `.cache/remote/<machine>/<id>/meta` (`{"mtime", "size", "at"}`); images and thumbnails made from
+  the copy go to `.../<id>/thumbs/` as in 4.5. Up to 5 MiB, herdr-workbench's route (row 26):
+  `base64` there through `exec(..., {on})`, the text written here with `writeTextFile`, decoded
+  with `base64 -d`. Larger, a local `sh` runs `hc exec --on m -- sh -c 'dd ... skip=N count=7'`
+  in 7 MiB chunks (checked: `hc exec` passes bytes through unchanged but keeps only the first
+  8 MB of output), else `scp` to the machine's ssh target from `hc machine ls`. Every route checks
+  the copy's size against the stat there before moving it into place. Then everything in 4.5 runs
+  on the copy. Copies of items no longer listed are removed after each poll.
+- The row and preview say "copy from server, fetched 18:42"; the copy is fetched again when the
+  file's mtime or size changes there (a poll's stat, or the stat taken before each open). Files
+  over 50 MiB ask first: Enter (Space, `o`) says the size, and a second press within 15 s fetches;
+  the preview shows the size instead of fetching. Edits to the copy do not go back; the preview
+  says so.
+- **`rl` there:** the poll's status line drives the same banner as here (3.1), worded for the
+  machine: "rl is not installed on server, ..." with **Install rl on server**, which reads the
+  mod's `rl` here and runs `INSTALL_RL_TEXT_SCRIPT` there with the text as an argument (a temporary
+  file, then the same rules: never over another program or a link, `~/.local/bin/rl`). "Not now"
+  is kept per machine.
+- Shift-D removes the item file on its machine (`rm` through `exec(..., {on})`, the folder from the
+  poll), then lists that machine again. The drop folder (3.5) is this Mac's only.
 
 ## 5. Hand-off to a review mod
 
 Not built; it waits for a document-review mod (a pane that shows a markdown or HTML file and lets
-the person comment on it, bound to an agent) to exist. For a markdown or HTML item, `R` (or a
-Review button) would open that mod beside the agent that added it, with that agent bound:
+the person comment on it, bound to an agent) to exist. For a markdown or HTML item, a Review key
+(chosen then; Shift-R lists the machines again, 4.6) or a Review button would open that mod beside
+the agent that added it, with that agent bound:
 
 ```js
 run("pane.split", { direction: "right", pane: agentPane ?? readlistPane,
@@ -392,7 +421,7 @@ run("pane.split", { direction: "right", pane: agentPane ?? readlistPane,
 - `agentPane` comes from `agents().find(a => a.address === item.by.terminal).pane` (row 10); if the
   agent has ended, the review opens beside the reading-list pane, unbound.
 - The reading list marks the item read. It does not track comments; the review mod owns those.
-- Until then, `R` is hidden.
+- Until then, nothing shows for it.
 
 ## 6. Repository and packaging
 
@@ -463,7 +492,7 @@ Each one is useful on its own.
 | 2 | Where the list lives | `~/.local/state/reading-list/` on each machine, `$READING_LIST_DIR` overrides. |
 | 3 | How it opens | A block in the left sidebar under Agents (a cloned layout), a pane on demand, and a popup on `cmd-shift-i` in increment 3. |
 | 4 | Do orchestrating agents post to it | At first only reports that need the person's decision; widen once the list has proved useful. |
-| 5 | How `rl` gets onto PATH | `rl` ships inside the mod (`mods/readlist/bin/rl`). On this Mac the mod's Install rl action (a banner while `rl` is missing, and `readlist.install-rl`) copies it to `~/.local/bin`, never over another program; the dev install links it there instead. Remote machines are increment 4. The JSON protocol (3.1) is the fallback. |
+| 5 | How `rl` gets onto PATH | `rl` ships inside the mod (`mods/readlist/bin/rl`). On this Mac the mod's Install rl action (a banner while `rl` is missing, and `readlist.install-rl`) copies it to `~/.local/bin`, never over another program; the dev install links it there instead. On another machine, the banner's Install rl on <machine> copies it to `~/.local/bin` there through `exec(..., {on})` (4.6). The JSON protocol (3.1) is the fallback. |
 | 6 | Share it on herdr.dev | Yes: a public repo laid out like a herdr-app home, with `RECIPE.md`, `preview.png` and the `herdr-mod` topic. |
 
 ## Appendix: API facts this design relies on
@@ -508,7 +537,7 @@ the design says what happens if it is wrong.
 | 23 | `shared(key)` / `setShared(key, v)`: persisted, seen by every mod, setting re-renders all | V-types | herdr.d.ts:389-393 |
 | 24 | `localStorage` is per mod copy | V-docs | AGENTS.md:997 |
 | 25 | `hc exec --on m <argv>` prints exactly what the program wrote; `hc file read --on m` (text); `hc put <t> <file>` sends a local file to a terminal's machine | V-docs | `hc exec --help`, `hc file --help`, `hc put --help` |
-| 26 | Remote binary fetch: `exec("sh", ["-c", 'base64 < "$1"', ...], {on})`, text written locally, then decoded with `base64 -d`; the runtime writes a `Uint8Array` as an empty file, so bytes cannot be written directly | V-mod (herdr-workbench `mods/t3-files/viewer.js:50-71`, 6 MB cap) | Larger files: `hc exec --on m cat` redirected locally through `sh -c` (assumed binary-safe) or `scp` |
+| 26 | Remote binary fetch: `exec("sh", ["-c", 'base64 < "$1"', ...], {on})`, text written locally, then decoded with `base64 -d`; the runtime writes a `Uint8Array` as an empty file, so bytes cannot be written directly | V-mod (herdr-workbench `mods/t3-files/viewer.js:50-71`, 6 MB cap); V-spike (increment 4: a 230 KB PNG fetched byte-exact; `exec` keeps 8 MiB, so this route stops at 5 MiB) | Larger files: `hc exec --on m` is binary-safe (V-spike: random bytes, same SHA-256) but keeps only the first 8 MB of output, so the mod fetches 7 MiB `dd` chunks (a 60 MiB file in about 4 s), else `scp` |
 | 26b | A program started by `exec` dies when the call ends; long-lived helpers use `hc run --bg --no-parent --rm` | V-mod (herdr-workbench `serve.js:32-45`) | Applies to the Quick Look panel (row 29) |
 | 27 | `open <path>` opens in the default app; `open -R` reveals in Finder; `open -a <App>` | Assumed (standard macOS, not run) | |
 | 28 | `qlmanage -t -s N -o dir files...` thumbnails md, HTML (with CSS), PDF page 1 and images | V-spike | A.3 |

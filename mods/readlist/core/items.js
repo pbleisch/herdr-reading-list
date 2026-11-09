@@ -72,6 +72,10 @@ export function normalizeItem(raw) {
   };
 }
 
+// The key an item has in state.json and everywhere the mod tells items apart: the id for
+// this machine's, `<machine>/<id>` for another machine's (the address form Herdr uses).
+export const itemKey = (item) => (item.machine ? `${item.machine}/${item.id}` : item.id);
+
 // Items from LIST_SCRIPT's output. Broken or foreign files are skipped; if two files
 // claim one id, the later-added wins.
 export function parseListing(stdout) {

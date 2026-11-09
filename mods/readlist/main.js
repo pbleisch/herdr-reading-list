@@ -1,7 +1,9 @@
 // Reading list: files and URLs agents and tools put up for the person to read (rl add).
 // Watches $READING_LIST_DIR (default ~/.local/state/reading-list): items/<id>.json are
 // the producers', state.json (read and done) is the person's, written only here, and
-// anything put in inbox/ (or dropped on the list) is added with rl.
+// anything put in inbox/ (or dropped on the list) is added with rl. Every other machine
+// Herdr reaches is listed every 15 s (its own folder there); its files are fetched into
+// the cache to be opened or drawn (core/remote.js).
 // Lives in the left sidebar under Agents (props {role: "sidebar"}), in a pane, or as the
 // popup (mod.open:readlist, cmd-shift-i). Props {role: "viewer"} is the preview-only pane
 // `v` opens; props {menu} is a filter menu one of the others opened.
@@ -9,16 +11,17 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, VirtualListScrollHandle, TextView, Editor, EditorState, InputState, Input } from "gpui-base";
-import { exec, readTextFile, writeTextFile, watchFolder, nextCommand, agents, spaces, panes, focused, theme, settings, layout, props, notify, appHome, run, shared, setShared, openOverlay, closeOverlay } from "herdr";
-import { LIST_SCRIPT, STAT_SCRIPT, STATS_SCRIPT, parseListing, parseStats, typeOf, openAction, itemFile } from "./core/items.js";
-import { WIDE, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, parseStat, previewKind, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
+import { exec, hc, readTextFile, writeTextFile, watchFolder, nextCommand, agents, spaces, panes, focused, machines, theme, settings, layout, props, notify, appHome, run, shared, setShared, openOverlay, closeOverlay } from "herdr";
+import { LIST_SCRIPT, STAT_SCRIPT, STATS_SCRIPT, parseListing, parseStats, typeOf, openAction, itemFile, itemKey } from "./core/items.js";
+import { WIDE, TEXT_BYTES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, parseStat, previewKind, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
 import { parseState, serializeState, applyAction, prune, rowsFor, counts, ago, who, isRead, isDone, isChanged, withInbox } from "./core/state.js";
 import { NO_FILTER, applyFilters, filterRows, isFiltered, options, labelFor } from "./core/filters.js";
 import { BURST_MS, arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction } from "./core/arrival.js";
 import { INBOX_SCRIPT, ADD_SCRIPT, parseInbox, inboxPlan } from "./core/inbox.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "./core/viewer.js";
 import { NAME } from "./core/name.js";
-import { RL_STATUS_SCRIPT, INSTALL_RL_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
+import { RL_STATUS_SCRIPT, INSTALL_RL_SCRIPT, INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
+import { POLL_MS, POLL_TIMEOUT_MS, ASK_MS, POLL_SCRIPT, BASE64_SCRIPT, DECODE_SCRIPT, CHUNKS_SCRIPT, PRUNE_COPIES_SCRIPT, parsePoll, afterPoll, syncMachines, pollPaths, unstated, mergeItems, onMachine, listedMachines, isOffline, safeName, copyPaths, parseMeta, isStale, fetchRoute, needsAsk, fetchedLabel, sizeLabel, remoteBanner } from "./core/remote.js";
 
 // This mod's folder under the app home (core/name.js).
 const MOD = `mods/${NAME}`;
@@ -26,20 +29,24 @@ const ICONS = `${MOD}/icons`;
 // The rl that ships with the mod: the drop folder runs it, and "Install rl" copies it to
 // ~/.local/bin (core/install.js).
 const RL = `${MOD}/bin/rl`;
-// localStorage: the rl banner state the person dismissed with "Not now".
+// localStorage: the rl banner state the person dismissed with "Not now", here and (a map
+// machine -> state) for other machines.
 const RL_DISMISSED = "readlist.rl-dismissed";
+const RL_DISMISSED_REMOTE = "readlist.rl-dismissed-remote";
 const ICON = { md: "file-text", text: "file-text", code: "file-code", html: "app-window", image: "image", pdf: "book-open", folder: "folder", url: "link", file: "file" };
 const ROW = 46, HEAD = 30, RAIL_ROW = 28;
 const KEYS = {
   down: "down", j: "down", up: "up", k: "up", home: "top", g: "top", end: "bottom", "shift-g": "bottom",
   enter: "open", space: "preview", r: "read", d: "done", u: "undo", "shift-d": "delete", tab: "view",
-  p: "pane", o: "reveal", c: "copy", "/": "find", f: "filter", v: "viewer",
+  p: "pane", o: "reveal", c: "copy", "/": "find", f: "filter", v: "viewer", "shift-r": "refresh",
 };
 // The preview's height when it shows below the list (a narrow pane, after `p`): half the
 // pane, at most BELOW.
 const BELOW = 260;
 // Cached images and thumbnails: hidden, so writing them does not reload the mod (row 17).
 const CACHE = `${MOD}/.cache/local`;
+// Copies of other machines' files, and images made from them (core/remote.js copyPaths).
+const REMOTE_CACHE = `${MOD}/.cache`;
 
 // Shared values (docs/design.md 4.4): the arrival claims, ids not to toast (dropped by the
 // person), the unread count, the item selected last, the viewer pane, and a filter menu's pick.
@@ -92,9 +99,22 @@ export default class ReadingList extends View {
       });
       return;
     }
+    // Every item (this machine's and the others'), and each one's STAT kind and mtime by
+    // item key (core/remote.js mergeItems). `local` and `localSt` are this machine's.
     this.items = [];
     this.fs = {};
     this.mt = {};
+    this.local = [];
+    this.localSt = { fs: {}, mt: {} };
+    // Other machines: name -> their state (core/remote.js), the ones being listed now, and
+    // the copies fetched (item key -> ms), being fetched (key -> promise).
+    this.remote = new Map();
+    this.polling = new Set();
+    this.fetched = new Map();
+    this.fetching = new Map();
+    this.metaRead = new Set();
+    // What arrived since each source's last listing (null: here; else a machine name).
+    this.seen = new Map();
     this.state = parseState(null);
     this.view = "list";
     this.sel = null;
@@ -133,6 +153,9 @@ export default class ReadingList extends View {
       this.watch(cx);
     });
     this.checkRl(cx);
+    // Other machines: listed now and every POLL_MS while this copy is alive.
+    this.pollAll(cx);
+    cx.timer.every(POLL_MS, (cx) => this.pollAll(cx));
     cx.spawn(async (cx) => {
       for (;;) {
         // A command reaches every shown copy: only the one the person uses acts on it.
@@ -170,15 +193,25 @@ export default class ReadingList extends View {
   }
 
   // "Install rl" (the banner's button, readlist.install-rl): copies the mod's rl to
-  // ~/.local/bin, never over another program, and says how it went.
-  installRl(cx) {
-    if (this.installing) return;
-    this.installing = true;
+  // ~/.local/bin here, or on `machine`, never over another program, and says how it went.
+  // `installing` is the machine being installed on ("" here), or null.
+  installRl(cx, machine = null) {
+    if (this.installing != null) return;
+    this.installing = machine ?? "";
     cx.spawn(async (cx) => {
-      const r = await exec("sh", ["-c", INSTALL_RL_SCRIPT, "readlist", `${appHome()}/${RL}`]).catch((e) => ({ stdout: "", stderr: String(e) }));
-      this.installing = false;
-      notify({ title: "Reading list", ...installToast(r.stdout || r.stderr) });
-      this.checkRl(cx);
+      const failed = (e) => ({ stdout: "", stderr: String(e?.message ?? e) });
+      let r;
+      if (machine) {
+        // The file is here: its text goes to the other machine as an argument.
+        const text = await readTextFile(`${appHome()}/${RL}`).catch(() => null);
+        r = text
+          ? await exec("sh", ["-c", INSTALL_RL_TEXT_SCRIPT, "readlist", text], { on: machine }).catch(failed)
+          : { stdout: "error\tthe mod's rl is missing", stderr: "" };
+      } else r = await exec("sh", ["-c", INSTALL_RL_SCRIPT, "readlist", `${appHome()}/${RL}`]).catch(failed);
+      this.installing = null;
+      notify({ title: "Reading list", ...installToast(r.stdout || r.stderr, machine) });
+      if (machine) this.poll(machine, cx);
+      else this.checkRl(cx);
       cx.notify();
     });
   }
@@ -194,6 +227,25 @@ export default class ReadingList extends View {
   dismissRl() {
     try {
       localStorage.setItem(RL_DISMISSED, this.rl?.state ?? "");
+    } catch {
+      // No storage: the banner just stays.
+    }
+  }
+
+  // Machine -> the rl state the person dismissed there.
+  remoteDismissed() {
+    try {
+      const v = JSON.parse(localStorage.getItem(RL_DISMISSED_REMOTE) ?? "{}");
+      return v && typeof v === "object" ? v : {};
+    } catch {
+      return {};
+    }
+  }
+
+  dismissRemoteRl(machine) {
+    try {
+      const state = this.remote.get(machine)?.rl?.state ?? "";
+      localStorage.setItem(RL_DISMISSED_REMOTE, JSON.stringify({ ...this.remoteDismissed(), [machine]: state }));
     } catch {
       // No storage: the banner just stays.
     }
@@ -257,14 +309,14 @@ export default class ReadingList extends View {
           this.ids = ids;
           exec("sh", ["-c", PRUNE_SCRIPT, "readlist", `${appHome()}/${CACHE}`, ...items.map((i) => i.id)]).catch(() => {});
         }
-        this.items = items;
-        this.fs = st.fs;
-        this.mt = st.mt;
+        this.local = onMachine(items, null);
+        this.localSt = st;
+        this.merge();
         this.gen++;
         this.state = parseState(stateText);
         this.error = null;
         this.loaded = true;
-        this.arrived(items, cx);
+        this.arrived(null, this.local, cx);
         this.publish();
       } while (this.again);
     } catch (e) {
@@ -276,6 +328,196 @@ export default class ReadingList extends View {
     this.takeInbox(cx);
   }
 
+  // Every item, this machine's and the others' (core/remote.js mergeItems).
+  merge() {
+    const m = mergeItems(this.local, this.localSt, this.remote);
+    this.items = m.items;
+    this.fs = m.fs;
+    this.mt = m.mt;
+  }
+
+  // ---- other machines (core/remote.js, docs/design.md 4.6) ----
+
+  // Lists every machine whose layout is ready; marks unreachable ones offline (their items
+  // stay) and forgets removed ones.
+  pollAll(cx) {
+    const { remote, poll } = syncMachines(this.remote, machines());
+    const changed = remote.size !== this.remote.size || [...remote].some(([n, e]) => this.remote.get(n) !== e);
+    this.remote = remote;
+    if (changed) {
+      this.merge();
+      this.publish();
+      cx.notify();
+    }
+    for (const name of poll) this.poll(name, cx);
+  }
+
+  // One exec on `name` lists its items, says whether rl is there and stats the files from
+  // the last listing. A machine that does not answer keeps its items, marked offline; a
+  // listing with files not stat-ed yet is followed by one more poll at once.
+  async poll(name, cx, again = false) {
+    if (this.polling.has(name)) return;
+    this.polling.add(name);
+    let entry;
+    try {
+      const paths = pollPaths(this.remote.get(name));
+      let parsed = null, error = null;
+      try {
+        const r = await exec("sh", ["-c", POLL_SCRIPT, "readlist", ...paths], { on: name, timeout: POLL_TIMEOUT_MS });
+        parsed = parsePoll(r.stdout, paths);
+        if (!parsed.ok) error = r.stderr.trim() || `the listing ended early (exit ${r.code})`;
+      } catch (e) {
+        error = String(e?.message ?? e);
+      }
+      // Removed from Herdr meanwhile.
+      if (!this.remote.has(name)) return;
+      entry = afterPoll(this.remote.get(name), parsed, Date.now(), error);
+      this.remote.set(name, entry);
+    } finally {
+      this.polling.delete(name);
+    }
+    this.merge();
+    if (entry.status === "online") {
+      const items = onMachine(entry.items, name);
+      this.arrived(name, items, cx);
+      const ids = items.map((i) => i.id).sort().join(" ");
+      if (ids !== this.remoteIds?.get(name)) {
+        (this.remoteIds ??= new Map()).set(name, ids);
+        exec("sh", ["-c", PRUNE_COPIES_SCRIPT, "readlist", `${appHome()}/${REMOTE_CACHE}/remote/${safeName(name)}`, ...items.map((i) => i.id)]).catch(() => {});
+      }
+      this.seedFetched(items, cx);
+      if (!again && unstated(entry).length) this.poll(name, cx, true);
+    }
+    this.publish();
+    cx.notify();
+  }
+
+  // The rows' "copy from <machine>, fetched HH:MM" for copies fetched before this copy of
+  // the mod started: read from each item's meta once.
+  seedFetched(items, cx) {
+    const todo = items.filter((i) => i.path && !this.metaRead.has(itemKey(i)));
+    if (!todo.length) return;
+    for (const i of todo) this.metaRead.add(itemKey(i));
+    cx.spawn(async (cx) => {
+      const metas = await Promise.all(todo.map((i) => this.copyMeta(i)));
+      let any = false;
+      todo.forEach((i, n) => {
+        if (metas[n] && !this.fetched.has(itemKey(i))) {
+          this.fetched.set(itemKey(i), metas[n].at);
+          any = true;
+        }
+      });
+      if (any) cx.notify();
+    });
+  }
+
+  // R: lists this machine and every other one again now.
+  refresh(cx) {
+    if (this.dir) this.reload(cx);
+    this.pollAll(cx);
+  }
+
+  // The file's stat on its machine: { kind, mtime, size }. Rejects when it doesn't answer.
+  async statOn(item) {
+    const r = await exec("sh", ["-c", STAT1_SCRIPT, "readlist", item.path], { on: item.machine ?? null, timeout: POLL_TIMEOUT_MS });
+    if (r.code !== 0) throw new Error(r.stderr.trim() || `stat exited ${r.code}`);
+    return parseStat(r.stdout);
+  }
+
+  copyMeta(item) {
+    const p = copyPaths(item.machine, item.id, item.path);
+    return readTextFile(`${appHome()}/${REMOTE_CACHE}/${p.meta}`).then(parseMeta, () => null);
+  }
+
+  // The machine's ssh target (hc machine ls), for scp; null if unknown.
+  async sshTarget(machine) {
+    const r = await hc(["machine", "ls", "--json"]).catch(() => null);
+    try {
+      return JSON.parse(r?.stdout ?? "").machines.find((m) => m.name === machine)?.target ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  // A local copy of a remote item's file, fetched when there is none or the file changed
+  // there (`st` is its stat there). Resolves with the copy's absolute path. Up to
+  // BASE64_MAX the file comes as base64 through exec; above, in chunks through hc exec,
+  // else with scp. Each fetch checks the size it got. `loud`: the person asked for it
+  // (Enter, Space, o), so a slow fetch says it started.
+  fetchCopy(item, st, loud = false) {
+    const key = itemKey(item);
+    if (this.fetching.has(key)) return this.fetching.get(key);
+    const root = `${appHome()}/${REMOTE_CACHE}`;
+    const p = copyPaths(item.machine, item.id, item.path);
+    const out = `${root}/${p.copy}`, meta = `${root}/${p.meta}`;
+    const job = (async () => {
+      const had = await this.copyMeta(item);
+      if (!isStale(had, st)) {
+        this.fetched.set(key, had.at);
+        return out;
+      }
+      const args = [String(st.size), String(st.mtime ?? 0), meta];
+      let r;
+      if (fetchRoute(st.size) === "base64") {
+        const b = await exec("sh", ["-c", BASE64_SCRIPT, "readlist", item.path], { on: item.machine, timeout: 120000 });
+        if (b.code !== 0) throw new Error(b.stderr.trim() || `base64 exited ${b.code}`);
+        const mk = await exec("mkdir", ["-p", `${root}/${p.dir}`]);
+        if (mk.code !== 0) throw new Error(mk.stderr.trim() || "cannot make the cache folder");
+        const tmp = `${root}/${p.dir}/.b64.${Math.random().toString(36).slice(2)}`;
+        await writeTextFile(tmp, b.stdout, null);
+        r = await exec("sh", ["-c", DECODE_SCRIPT, "readlist", tmp, out, ...args]);
+      } else {
+        if (loud) notify({ title: "Reading list", body: `Fetching ${item.title} (${sizeLabel(st.size)}) from ${item.machine}…`, level: "info", timeout: 4000 });
+        const target = (await this.sshTarget(item.machine)) ?? "";
+        r = await exec("sh", ["-c", CHUNKS_SCRIPT, "readlist", item.machine, item.path, out, args[0], args[1], meta, target], { timeout: 600000 });
+      }
+      if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
+      this.fetched.set(key, (await this.copyMeta(item))?.at ?? Date.now());
+      return out;
+    })();
+    this.fetching.set(key, job);
+    const done = () => this.fetching.delete(key);
+    job.then(done, done);
+    return job;
+  }
+
+  // Enter, Space or o on another machine's file: its local copy, fetched if needed, as
+  // { path, st }; null (after saying why) when there is none to use. A file over
+  // ASK_BYTES is fetched only on a second press within ASK_MS.
+  async copyFor(item, press) {
+    const where = item.machine;
+    let st;
+    try {
+      st = await this.statOn(item);
+    } catch (e) {
+      notify({ title: "Reading list", body: `${where} is not answering: ${String(e?.message ?? e)}`, level: "warning" });
+      return null;
+    }
+    if (st.kind === "-") {
+      notify({ title: "Reading list", body: `${item.title} is gone from ${where}: ${item.path}`, level: "warning" });
+      return null;
+    }
+    if (st.kind === "d") {
+      notify({ title: "Reading list", body: `${item.title} is a folder on ${where}; the preview lists it, and c copies its path.`, level: "info" });
+      return null;
+    }
+    const key = itemKey(item);
+    if (needsAsk(st.size) && isStale(await this.copyMeta(item), st)) {
+      if (!(this.ask?.key === key && Date.now() - this.ask.at < ASK_MS)) {
+        this.ask = { key, at: Date.now() };
+        notify({ title: "Reading list", body: `${item.title} is ${sizeLabel(st.size)} on ${where}. Press ${press} again to fetch a copy.`, level: "info" });
+        return null;
+      }
+      this.ask = null;
+    }
+    try {
+      return { path: await this.fetchCopy(item, st, true), st };
+    } catch (e) {
+      notify({ title: "Reading list", body: `Couldn't fetch ${item.title} from ${where}: ${String(e?.message ?? e)}`, level: "error" });
+      return null;
+    }
+  }
+
   // The unread count, for a badge elsewhere (docs/design.md 4.4). Every copy computes the
   // same number, so only a change is written.
   publish() {
@@ -283,11 +525,12 @@ export default class ReadingList extends View {
     if (shared(UNREAD) !== n) setShared(UNREAD, n);
   }
 
-  // New and re-added items since this copy's last listing: claim them, and toast what this
-  // copy still holds when the burst ends (core/arrival.js).
-  arrived(items, cx) {
-    const seen = this.seen;
-    this.seen = new Set(items.map(arrivalKey));
+  // New and re-added items since this copy's last listing of `source` (null: here, else a
+  // machine): claim them, and toast what this copy still holds when the burst ends
+  // (core/arrival.js).
+  arrived(source, items, cx) {
+    const seen = this.seen.get(source) ?? null;
+    this.seen.set(source, new Set(items.map(arrivalKey)));
     const fresh = arrivals(seen, items);
     if (!fresh.length) return;
     setShared(TOASTED, claim(shared(TOASTED), fresh.map(arrivalKey), this.copy, Date.now()));
@@ -317,7 +560,7 @@ export default class ReadingList extends View {
     this.pending.clear();
     const hush = quietIds(shared(QUIET), now);
     const listed = new Map(this.items.map((i) => [arrivalKey(i), i]));
-    const items = mine.map((k) => listed.get(k)).filter((i) => i && !hush.has(i.id) && !isRead(i, this.state) && !isDone(i, this.state));
+    const items = mine.map((k) => listed.get(k)).filter((i) => i && !hush.has(itemKey(i)) && !isRead(i, this.state) && !isDone(i, this.state));
     if (!items.length) return;
     notify({ ...toastFor(items, agents()), level: "info", action: toastAction(panes(), viewerPane(shared(VIEWER), panes())) });
   }
@@ -384,7 +627,8 @@ export default class ReadingList extends View {
     });
   }
 
-  // Applies an action to state.json with compare-and-swap, retrying on a stale read.
+  // Applies an action to state.json with compare-and-swap, retrying on a stale read. `id`
+  // is the item's key (core/items.js itemKey).
   // Resolves once it is saved (or given up), so the popup can close after it.
   mark(id, action, cx, mtime) {
     this.state = applyAction(this.state, id, action, nowIso(), mtime);
@@ -394,7 +638,7 @@ export default class ReadingList extends View {
       try {
         for (let attempt = 0; attempt < 5; attempt++) {
           const text = await readTextFile(path);
-          const next = prune(applyAction(parseState(text), id, action, nowIso(), mtime), this.items.map((i) => i.id), Date.now());
+          const next = prune(applyAction(parseState(text), id, action, nowIso(), mtime), this.items.map(itemKey), Date.now(), undefined, listedMachines(this.remote));
           try {
             await writeTextFile(path, serializeState(next), text);
             this.state = next;
@@ -412,9 +656,23 @@ export default class ReadingList extends View {
     }));
   }
 
-  // Enter: opens the item and marks it read; true when it opened.
+  // Enter: opens the item and marks it read; true when it opened. Another machine's file
+  // opens from its local copy.
   async open(item, cx) {
     let kind = null, mtime = null;
+    if (item.path && item.machine) {
+      const c = await this.copyFor(item, "Enter");
+      if (!c) return false;
+      const act = openAction({ ...item, path: c.path }, c.st.kind);
+      const r = await exec("open", act.how === "reveal" ? ["-R", act.target] : [act.target]).catch((e) => ({ code: 1, stderr: String(e) }));
+      if (r.code !== 0) {
+        notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${r.stderr.trim()}`, level: "error" });
+        return false;
+      }
+      if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so its copy is shown in Finder instead of opened.`, level: "info" });
+      await this.mark(itemKey(item), "read", cx, c.st.mtime);
+      return true;
+    }
     if (item.path) {
       const r = await exec("sh", ["-c", STATS_SCRIPT, "readlist", item.path]).catch(() => null);
       const st = parseStats(r?.stdout ?? "", [item.path]);
@@ -435,7 +693,7 @@ export default class ReadingList extends View {
       }
       if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so it's shown in Finder instead of opened.`, level: "info" });
     }
-    await this.mark(item.id, "read", cx, mtime);
+    await this.mark(itemKey(item), "read", cx, mtime);
     return true;
   }
 
@@ -453,31 +711,43 @@ export default class ReadingList extends View {
     this.quicklook = null;
     if (open) {
       const r = await exec("sh", ["-c", CLOSE_SCRIPT, "readlist", open.pid]).catch(() => null);
-      if (r?.code === 0 && open.id === item.id) return;
+      if (r?.code === 0 && open.id === itemKey(item)) return;
     }
     if (!item.path) {
       notify({ title: "Reading list", body: "Quick Look has no preview for a link; Enter opens it.", level: "info" });
       return;
     }
-    const st = await exec("sh", ["-c", STAT_SCRIPT, "readlist", item.path]).catch(() => null);
-    if (st?.stdout.trim() !== "d" && st?.stdout.trim() !== "f" && st?.stdout.trim() !== "x") {
-      notify({ title: "Reading list", body: `${item.title} is gone: ${item.path}`, level: "warning" });
-      return;
+    // Another machine's file: Quick Look shows its local copy.
+    let path = item.path;
+    if (item.machine) {
+      const c = await this.copyFor(item, "Space");
+      if (!c) return;
+      path = c.path;
+    } else {
+      const st = await exec("sh", ["-c", STAT_SCRIPT, "readlist", item.path]).catch(() => null);
+      if (st?.stdout.trim() !== "d" && st?.stdout.trim() !== "f" && st?.stdout.trim() !== "x") {
+        notify({ title: "Reading list", body: `${item.title} is gone: ${item.path}`, level: "warning" });
+        return;
+      }
     }
-    const r = await exec("sh", ["-c", PREVIEW_SCRIPT, "readlist", item.path]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+    const r = await exec("sh", ["-c", PREVIEW_SCRIPT, "readlist", path]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
     const pid = r.stdout.trim();
     if (r.code !== 0 || !/^\d+$/.test(pid)) {
       notify({ title: "Reading list", body: `Couldn't preview ${item.title}: ${r.stderr.trim()}`, level: "error" });
       return;
     }
-    this.quicklook = { id: item.id, pid };
+    this.quicklook = { id: itemKey(item), pid };
   }
 
   // The in-pane preview of `item`, at most one being made at a time; the latest selection
   // wins, and what the pane showed stays until the new one is ready.
   wantPreview(item, width, cx) {
     const size = thumbSize(width);
-    const key = `${item.id}|${item.added_at}|${size}|${this.gen}`;
+    const k = itemKey(item);
+    // Another machine's item: made again when its file changes there (the poll's mtime),
+    // a copy is fetched, or the machine goes offline or comes back.
+    const version = item.machine ? `${this.mt[k]}|${this.fetched.get(k)}|${isOffline(this.remote, item)}` : this.gen;
+    const key = `${k}|${item.added_at}|${size}|${version}`;
     if (key === this.pvKey) return;
     this.pvKey = key;
     this.pvWant = { item, size };
@@ -493,7 +763,7 @@ export default class ReadingList extends View {
           try {
             pv = await this.loadPreview(item, size);
           } catch (e) {
-            pv = { id: item.id, how: "error", error: String(e?.message ?? e) };
+            pv = { id: itemKey(item), how: "error", error: String(e?.message ?? e) };
           }
           if (key === this.pvKey) this.setPreview(pv);
           else pv.code?.release();
@@ -510,20 +780,38 @@ export default class ReadingList extends View {
     this.pv = pv;
   }
 
+  // What the preview shows for `item`. Another machine's text is read there (up to 1 MiB
+  // through readTextFile); its images and thumbnails are made from a local copy.
   async loadPreview(item, size) {
-    const base = { id: item.id };
+    const key = itemKey(item);
+    const base = { id: key };
     if (item.url) return { ...base, how: "url" };
-    const st = parseStat((await exec("sh", ["-c", STAT1_SCRIPT, "readlist", item.path])).stdout);
+    const on = item.machine ?? null;
+    let st;
+    try {
+      st = await this.statOn(item);
+    } catch (e) {
+      if (on) return { ...base, how: "offline", error: String(e?.message ?? e) };
+      throw e;
+    }
     let kind = previewKind(item, st.kind);
-    const run = async (script, ...args) => {
-      const r = await exec("sh", ["-c", script, "readlist", ...args], { timeout: 60000 });
+    const run = async (script, args, where = null) => {
+      const r = await exec("sh", ["-c", script, "readlist", ...args], { on: where, timeout: 60000 });
       if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
       return r.stdout;
     };
     if (kind.how === "missing" || kind.how === "url") return { ...base, how: kind.how };
-    if (kind.how === "folder") return { ...base, how: "folder", folder: parseFolder(await run(LIST_DIR_SCRIPT, item.path)) };
+    if (kind.how === "folder") return { ...base, how: "folder", folder: parseFolder(await run(LIST_DIR_SCRIPT, [item.path], on)) };
     if (kind.how === "markdown" || kind.how === "text") {
-      const text = previewText(await run(HEAD_SCRIPT, item.path), st.size);
+      let raw;
+      if (on && st.size <= 1024 * 1024) {
+        // Rejects on text it cannot read as UTF-8: then the head, as here.
+        raw = await readTextFile(item.path, { on }).catch(() => undefined);
+        if (raw === null) return { ...base, how: "missing" };
+        if (typeof raw === "string" && raw.length > TEXT_BYTES) raw = raw.slice(0, TEXT_BYTES);
+      }
+      if (typeof raw !== "string") raw = await run(HEAD_SCRIPT, [item.path], on);
+      const text = previewText(raw, st.size);
       if (text === null) kind = { how: "thumb" };
       else if (kind.how === "markdown") return { ...base, how: "markdown", text: stripThreads(text) };
       else {
@@ -534,31 +822,54 @@ export default class ReadingList extends View {
       }
     }
     const name = cacheName(item.id, st, kind, size);
+    const how = kind.how === "image" ? "copy" : String(size);
+    if (on) {
+      // Over ASK_BYTES, the copy waits for the person's Enter.
+      if (needsAsk(st.size) && isStale(await this.copyMeta(item), st)) return { ...base, how: "big", size: st.size };
+      const copy = await this.fetchCopy(item, st);
+      const p = copyPaths(on, item.id, item.path);
+      const dir = `${appHome()}/${REMOTE_CACHE}/${p.thumbs}`;
+      await run(CACHE_SCRIPT, [copy, dir, `${dir}/${name}`, item.id, how]);
+      return { ...base, how: "image", src: `${REMOTE_CACHE}/${p.thumbs}/${name}`, thumb: kind.how === "thumb" };
+    }
     const dir = `${appHome()}/${CACHE}`;
-    await run(CACHE_SCRIPT, item.path, dir, `${dir}/${name}`, item.id, kind.how === "image" ? "copy" : String(size));
+    await run(CACHE_SCRIPT, [item.path, dir, `${dir}/${name}`, item.id, how]);
     return { ...base, how: "image", src: `${CACHE}/${name}`, thumb: kind.how === "thumb" };
   }
 
-  // o: show the item in Finder. Revealing never opens or runs anything.
+  // o: show the item in Finder (another machine's: its local copy). Revealing never opens
+  // or runs anything.
   async reveal(item) {
     if (!item.path) {
       notify({ title: "Reading list", body: "A link has no file to show in Finder; Enter opens it.", level: "info" });
       return;
     }
-    const r = await exec("open", ["-R", item.path]).catch((e) => ({ code: 1, stderr: String(e) }));
+    let path = item.path;
+    if (item.machine) {
+      const c = await this.copyFor(item, "o");
+      if (!c) return;
+      path = c.path;
+    }
+    const r = await exec("open", ["-R", path]).catch((e) => ({ code: 1, stderr: String(e) }));
     if (r.code !== 0) notify({ title: "Reading list", body: `Couldn't show ${item.title} in Finder: ${r.stderr.trim()}`, level: "error" });
   }
 
-  // Shift-D: take the item off the list, as `rl rm` does (removes its file).
+  // Shift-D: take the item off the list, as `rl rm` does (removes its file, on its machine).
   remove(item, cx) {
-    this.items = this.items.filter((i) => i.id !== item.id);
+    const key = itemKey(item);
+    const dir = item.machine ? this.remote.get(item.machine)?.dir : this.dir;
+    if (!dir) return;
+    if (isOffline(this.remote, item)) {
+      notify({ title: "Reading list", body: `Can't remove ${item.title} while ${item.machine} is not answering.`, level: "warning" });
+      return;
+    }
+    this.items = this.items.filter((i) => itemKey(i) !== key);
     cx.notify();
     cx.spawn(async (cx) => {
-      const r = await exec("rm", ["-f", "--", itemFile(this.dir, item.id)]).catch((e) => ({ code: 1, stderr: String(e) }));
-      if (r.code !== 0) {
-        notify({ title: "Reading list", body: `Couldn't remove ${item.title}: ${r.stderr.trim()}`, level: "error" });
-        await this.reload(cx);
-      }
+      const r = await exec("rm", ["-f", "--", itemFile(dir, item.id)], { on: item.machine ?? null }).catch((e) => ({ code: 1, stderr: String(e) }));
+      if (r.code !== 0) notify({ title: "Reading list", body: `Couldn't remove ${item.title}: ${r.stderr.trim()}`, level: "error" });
+      if (item.machine) await this.poll(item.machine, cx);
+      else if (r.code !== 0) await this.reload(cx);
     });
   }
 
@@ -580,7 +891,7 @@ export default class ReadingList extends View {
       return;
     }
     if (this.role() === "viewer") return;
-    if (cur) setShared(SELECTED, { id: cur.item.id, at: Date.now() });
+    if (cur) setShared(SELECTED, { id: itemKey(cur.item), at: Date.now() });
     const before = panes();
     const f = focused();
     const at = splitTarget(before, f?.tab, f?.pane ?? before.find((p) => p.focused)?.pane);
@@ -650,30 +961,31 @@ export default class ReadingList extends View {
     }
     const rows = this.rows();
     const items = rows.filter((r) => r.type === "item");
-    const at = Math.max(0, items.findIndex((r) => r.item.id === this.sel));
+    const at = Math.max(0, items.findIndex((r) => itemKey(r.item) === this.sel));
     const cur = items[at];
     const move = (n) => {
       const next = items[Math.max(0, Math.min(items.length - 1, n))];
       if (!next) return;
-      this.select(next.item.id);
+      this.select(itemKey(next.item));
       this.scroll.scroll_to_item(rows.indexOf(next));
     };
-    const after = () => (items[at + 1] ?? items[at - 1])?.item.id ?? null;
+    const after = () => { const r = items[at + 1] ?? items[at - 1]; return r ? itemKey(r.item) : null; };
     switch (name) {
       case "down": move(at + 1); break;
       case "up": move(at - 1); break;
       case "top": move(0); break;
       case "bottom": move(items.length - 1); break;
       case "open": if (cur) this.openAndClose(cur.item, cx); break;
-      case "preview": if (cur) cx.spawn(async () => this.preview(cur.item)); break;
+      // A copy fetched from another machine shows in its row once these finish.
+      case "preview": if (cur) cx.spawn(async (cx) => { await this.preview(cur.item); cx.notify(); }); break;
       case "read":
-        if (cur) this.mark(cur.item.id, cur.read && this.view === "list" ? "unread" : "read", cx, cur.item.path ? this.mt[cur.item.path] : null);
+        if (cur) this.mark(itemKey(cur.item), cur.read && this.view === "list" ? "unread" : "read", cx, cur.item.path ? this.mt[itemKey(cur.item)] : null);
         break;
       case "undo":
       case "done":
         if (name === "undo" && this.view !== "done") return false;
         if (cur) {
-          this.mark(cur.item.id, this.view === "done" ? "undone" : "done", cx);
+          this.mark(itemKey(cur.item), this.view === "done" ? "undone" : "done", cx);
           this.select(after());
         }
         break;
@@ -688,7 +1000,7 @@ export default class ReadingList extends View {
         // The list may have shrunk under the preview: keep the selection in view.
         if (cur) this.scroll.scroll_to_item(rows.indexOf(cur));
         break;
-      case "reveal": if (cur) cx.spawn(async () => this.reveal(cur.item)); break;
+      case "reveal": if (cur) cx.spawn(async (cx) => { await this.reveal(cur.item); cx.notify(); }); break;
       case "copy":
         if (cur) {
           cx.write_to_clipboard(copyText(cur.item));
@@ -713,6 +1025,7 @@ export default class ReadingList extends View {
       case "viewer": this.toggleViewer(cur, cx); break;
       case "focus": this.focus(); break;
       case "install-rl": this.installRl(cx); break;
+      case "refresh": this.refresh(cx); break;
       default: return false;
     }
     cx.notify();
@@ -801,12 +1114,12 @@ export default class ReadingList extends View {
 
   previewBody(item, t) {
     const message = (text) => div().p(14).text_size(12).text_color(t.dim).child(text);
-    const pv = this.pv?.id === item.id ? this.pv : null;
+    const pv = this.pv?.id === itemKey(item) ? this.pv : null;
     if (!pv) return message("Loading preview…");
     switch (pv.how) {
       case "url":
         return v_flex().p(14).gap(8).text_size(12)
-          .child(div().id(`rl-url-${item.id}`).text_color(t.accent).cursor_pointer().hover((s) => s.underline())
+          .child(div().id(`rl-url-${itemKey(item)}`).text_color(t.accent).cursor_pointer().hover((s) => s.underline())
             .on_click((_e, cx) => cx.open_url(item.url)).child(item.url))
           .child(div().text_color(t.dim).child("A link: Enter opens it in the browser."));
       case "missing":
@@ -814,14 +1127,20 @@ export default class ReadingList extends View {
           .child(div().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("gone"))
           .child(div().text_size(12).text_color(t.dim).child("Nothing is at this path any more. d marks it done; Shift-D takes it off the list."));
       case "markdown":
-        return div().flex_1().min_h(0).px(14).py(8).child(TextView.markdown(`rl-md-${item.id}`, pv.text).scrollable(true).selectable(true).size_full()
+        return div().flex_1().min_h(0).px(14).py(8).child(TextView.markdown(`rl-md-${itemKey(item)}`, pv.text).scrollable(true).selectable(true).size_full()
           .on_link_click((url, cx) => { if (/^https?:\/\//i.test(url)) cx.open_url(url); }));
       case "text":
         return Editor.new(pv.code).flex_1().min_h(0);
       case "image":
         return div().flex_1().min_h(0).p(12).child(image(pv.src).size_full());
+      case "offline":
+        return v_flex().p(14).gap(8).items_start()
+          .child(div().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("offline"))
+          .child(div().text_size(12).text_color(t.dim).child(`${item.machine} is not answering. Its items stay listed from the last time it did; R tries again.`));
+      case "big":
+        return message(`${item.title} is ${sizeLabel(pv.size)} on ${item.machine}. Enter fetches a copy (it asks first) and opens it; the preview shows here after that.`);
       case "folder":
-        return v_flex().id(`rl-folder-${item.id}`).flex_1().min_h(0).overflow_y_scrollbar().px(10).py(6)
+        return v_flex().id(`rl-folder-${itemKey(item)}`).flex_1().min_h(0).overflow_y_scrollbar().px(10).py(6)
           .children(pv.folder.entries.map((e) => h_flex().h(22).px(4).gap(7).items_center().flex_none()
             .child(svg(`${ICONS}/${e.dir ? "folder" : "file"}.svg`).size(13).flex_none().text_color(t.muted))
             .child(div().flex_1().min_w(0).truncate().text_size(12).child(e.name))))
@@ -835,6 +1154,12 @@ export default class ReadingList extends View {
   // `how`: "side" (right of the list), "below" (under it) or "full" (the viewer pane).
   previewPane(item, how, t) {
     const roomy = how !== "below";
+    const k = itemKey(item);
+    const where = item.machine && item.path ? `${item.machine}:${item.path}` : item.path ?? item.url;
+    // Another machine's file: where the preview comes from.
+    const source = !item.machine || !item.path ? null
+      : this.fetched.has(k) ? `${fetchedLabel(item.machine, this.fetched.get(k))}; edits to the copy stay on this Mac`
+      : `on ${item.machine}`;
     return v_flex().id("rl-preview").min_w(0).min_h(0).bg(t.background)
       .when(how === "side", (el) => el.flex_1().h_full().border_l(1).border_color(t.border))
       .when(how === "full", (el) => el.flex_1().size_full())
@@ -842,7 +1167,8 @@ export default class ReadingList extends View {
       .child(v_flex().px(14).pt(roomy ? 10 : 8).pb(roomy ? 8 : 6).gap(2).flex_none().border_b(1).border_color(t.border)
         .child(div().truncate().font_medium().child(item.title))
         // Below the list, the row above already shows the note: keep the header short.
-        .when(roomy, (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(item.path ?? item.url)))
+        .when(roomy, (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(where)))
+        .when(Boolean(source), (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(source)))
         .when(roomy && Boolean(item.note), (el) => el.child(div().text_size(11.5).text_color(t.muted).child(item.note))))
       .child(this.previewBody(item, t));
   }
@@ -858,7 +1184,7 @@ export default class ReadingList extends View {
   renderViewer(cx) {
     const t = theme();
     const id = selectedId(shared(SELECTED));
-    const item = this.items.find((i) => i.id === id);
+    const item = this.items.find((i) => itemKey(i) === id);
     if (item) this.wantPreview(item, this.width ?? 0, cx);
     return this.sized(v_flex().id("readlist-viewer").track_focus(this.handle).size_full().min_h(0).bg(t.background).text_size(13))
       .on_key_down((e, cx) => { if (this.act(KEYS[e.keystroke], cx)) cx.stop_propagation(); })
@@ -879,11 +1205,11 @@ export default class ReadingList extends View {
     const rows = this.rows();
     const n = counts(this.items, this.state);
     const items = rows.filter((r) => r.type === "item");
-    if (this.wantSel && this.items.some((i) => i.id === this.wantSel)) {
-      if (items.some((r) => r.item.id === this.wantSel)) this.select(this.wantSel);
+    if (this.wantSel && this.items.some((i) => itemKey(i) === this.wantSel)) {
+      if (items.some((r) => itemKey(r.item) === this.wantSel)) this.select(this.wantSel);
       this.wantSel = null;
     }
-    if (!items.some((r) => r.item.id === this.sel)) this.sel = items[0]?.item.id ?? null;
+    if (!items.some((r) => itemKey(r.item) === this.sel)) this.sel = items[0] ? itemKey(items[0].item) : null;
     const focused = this.handle.is_focused() || this.typing;
     const now = Date.now();
     const live = agents();
@@ -892,8 +1218,8 @@ export default class ReadingList extends View {
     const filtered = isFiltered(this.f);
 
     const icon = (r, size) => {
-      const type = typeOf(r.item, r.item.path ? this.fs[r.item.path] : null);
-      const gone = r.item.path && this.fs[r.item.path] === "-";
+      const type = typeOf(r.item, r.item.path ? this.fs[itemKey(r.item)] : null);
+      const gone = r.item.path && this.fs[itemKey(r.item)] === "-";
       return svg(`${ICONS}/${ICON[type]}.svg`).size(size).flex_none().text_color(gone ? t.dim : r.read ? t.muted : t.foreground);
     };
     const dot = (r) => div().size(7).flex_none().rounded(4).when(!r.read, (el) => el.bg(t.accent));
@@ -901,8 +1227,9 @@ export default class ReadingList extends View {
 
     const itemRow = (r) => {
       const i = r.item;
-      const on = i.id === this.sel;
-      const gone = i.path && this.fs[i.path] === "-";
+      const on = itemKey(i) === this.sel;
+      const k = itemKey(i);
+      const gone = i.path && this.fs[k] === "-";
       if (rail) {
         return h_flex().h(RAIL_ROW).px(8).gap(4).items_center().justify_center()
           .when(on && focused, (el) => el.bg(t.selected))
@@ -911,8 +1238,10 @@ export default class ReadingList extends View {
           .child(dot(r));
       }
       const by = who(i, live);
-      const meta = [i.note, by.label].filter(Boolean).join(" · ");
-      const changed = !gone && i.path && isChanged(i, this.state, this.mt[i.path]);
+      const offline = isOffline(this.remote, i);
+      const copied = i.machine && this.fetched.has(k) ? fetchedLabel(i.machine, this.fetched.get(k), now) : null;
+      const meta = [i.note, by.label, copied].filter(Boolean).join(" · ");
+      const changed = !gone && i.path && isChanged(i, this.state, this.mt[k]);
       return h_flex().h(ROW).px(8).gap(9).rounded(8).items_center().cursor_pointer()
         .when(on, (el) => el.bg(focused ? t.selected : t.raised))
         .hover((s) => s.bg(t.hover))
@@ -921,6 +1250,8 @@ export default class ReadingList extends View {
           .child(h_flex().gap(6).items_center().min_w(0)
             .child(div().flex_1().min_w(0).truncate().text_color(r.read ? t.muted : t.foreground).when(!r.read, (el) => el.font_medium()).child(i.title))
             .when(Boolean(changed), (el) => el.child(chip("changed", t.accent)))
+            .when(Boolean(i.machine), (el) => el.child(chip(i.machine, t.muted)))
+            .when(offline, (el) => el.child(chip("offline", t.blocked)))
             .when(i.adds > 1, (el) => el.child(div().flex_none().text_size(10).text_color(t.dim).child(`×${i.adds}`)))
             .child(div().flex_none().text_size(11).text_color(t.dim).child(ago(i.added_at, now))))
           .child(div().truncate().text_size(11).text_color(t.dim).child(gone ? `gone · ${meta}` : meta)))
@@ -934,13 +1265,13 @@ export default class ReadingList extends View {
     const sizes = rows.map((r) => (rail ? RAIL_ROW : r.type === "head" ? HEAD : ROW));
     const list = v_flex().id("rl-body").relative().flex_1().min_h(0)
       .child(v_virtual_list("rl-rows", rows.length, sizes,
-        (index) => (rows[index].type === "head" ? `head-${rows[index].label}` : rows[index].item.id),
+        (index) => (rows[index].type === "head" ? `head-${rows[index].label}` : itemKey(rows[index].item)),
         (range) => rows.slice(range.start, range.end).map((r) => (r.type === "head" ? headRow(r) : itemRow(r))))
         .track_scroll(this.scroll)
         .size_full()
         .px(rail ? 0 : 8)
         .on_item_click((key, cx) => {
-          const row = rows.find((r) => r.type === "item" && r.item.id === key);
+          const row = rows.find((r) => r.type === "item" && itemKey(r.item) === key);
           if (!row) return;
           // A click selects; a double-click opens. Moving through the list never opens.
           const now = Date.now();
@@ -1028,9 +1359,12 @@ export default class ReadingList extends View {
         .child(div().min_w(0).truncate().child(a.label))
         .child(svg(`${ICONS}/x.svg`).size(11).flex_none().text_color(t.dim))));
 
-    // While rl can't be used from a terminal here: what is wrong, and the Install button.
-    const banner = !rail && this.rl ? rlBanner(this.rl) : null;
-    const showBanner = Boolean(banner) && this.rlDismissed() !== this.rl.state;
+    // While rl can't be used from a terminal here, or on another machine that answers: what
+    // is wrong, and the Install button. This machine's comes first.
+    const localBanner = !rail && this.rl ? rlBanner(this.rl) : null;
+    const banner = localBanner && this.rlDismissed() !== this.rl.state ? { ...localBanner, machine: null }
+      : !rail ? remoteBanner(this.remote, this.remoteDismissed()) : null;
+    const showBanner = Boolean(banner);
     const bannerRow = () => v_flex().id("rl-banner").mx(14).mb(8).px(10).py(9).gap(8).flex_none().rounded(8)
       .border(1).border_color(t.border).bg(t.raised).text_size(12)
       .child(div().text_color(t.foreground).child(banner.text))
@@ -1038,10 +1372,10 @@ export default class ReadingList extends View {
         .when(Boolean(banner.button), (el) => el.child(div().id("rl-install").flex_none().h(24).px(10).rounded(6).flex().items_center().cursor_pointer()
           .bg(t.solid).text_color(t.solid_foreground).font_medium().hover((s) => s.opacity(0.9))
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-          .on_click((_e, cx) => { this.installRl(cx); cx.notify(); })
-          .tooltip("Copy this list's rl to ~/.local/bin")
-          .child(this.installing ? "Installing…" : "Install rl")))
-        .child(link("rl-not-now", "Not now", false, () => this.dismissRl())));
+          .on_click((_e, cx) => { this.installRl(cx, banner.machine); cx.notify(); })
+          .tooltip(banner.machine ? `Copy this list's rl to ~/.local/bin on ${banner.machine}` : "Copy this list's rl to ~/.local/bin")
+          .child(this.installing === (banner.machine ?? "") ? "Installing…" : banner.machine ? `Install rl on ${banner.machine}` : "Install rl")))
+        .child(link("rl-not-now", "Not now", false, () => (banner.machine ? this.dismissRemoteRl(banner.machine) : this.dismissRl()))));
 
     // The `/` box.
     const findRow = h_flex().mx(14).mb(6).h(26).px(7).gap(6).flex_none().items_center().rounded(6)
@@ -1056,14 +1390,14 @@ export default class ReadingList extends View {
     // The preview: beside the list in a wide pane, below it in a narrow one (after `p`).
     // The popup is compact: no preview until `p`, and then below the list.
     const side = wide && !popup;
-    const selRow = items.find((r) => r.item.id === this.sel);
+    const selRow = items.find((r) => itemKey(r.item) === this.sel);
     const showPreview = !rail && Boolean(selRow) && previewShown(width, this.choice);
     const listW = Math.round(Math.max(300, Math.min(460, width * 0.42)));
     if (showPreview) this.wantPreview(selRow.item, side ? width - listW : width, cx);
 
     const keyHints = this.view === "done"
       ? (wide ? ["↵ open", "␣ look", "p preview", "v viewer", "o reveal", "c copy", "/ find", "f filter", "d not done", "tab list"] : ["↵ open", "␣ look", "v view", "/ find", "d not done"])
-      : (wide ? ["↵ open", "␣ look", "p preview", "v viewer", "o reveal", "c copy", "/ find", "f filter", "r read", "d done", "tab done"] : ["↵ open", "␣ look", "v view", "/ find", "r read", "d done"]);
+      : (wide ? ["↵ open", "␣ look", "p preview", "v viewer", "o reveal", "c copy", "/ find", "f filter", "r read", "d done", "tab done", ...(this.remote.size ? ["R refresh"] : [])] : ["↵ open", "␣ look", "v view", "/ find", "r read", "d done"]);
     const hints = h_flex().h(24).px(16).flex_none().items_center().gap(10).text_size(10.5).text_color(t.dim).overflow_hidden()
       .children(keyHints.map((s) => div().flex_none().child(s)));
 

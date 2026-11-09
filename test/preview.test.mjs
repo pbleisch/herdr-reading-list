@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeItem } from "../mods/readlist/core/items.js";
 import {
-  WIDE, TEXT_BYTES, FOLDER_ENTRIES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT,
+  WIDE, TEXT_BYTES, FOLDER_ENTRIES, QL_SECONDS, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT,
   previewShown, previewKind, thumbSize, cacheName, parseStat, previewText, stripThreads, parseFolder, copyText,
 } from "../mods/readlist/core/preview.js";
 
@@ -125,6 +125,26 @@ test("CACHE_SCRIPT makes a Quick Look thumbnail (macOS)", { skip: process.platfo
   sh(CACHE_SCRIPT, src, cache, out, "0123456789abcdef", "800");
   assert.ok(existsSync(out));
   assert.deepEqual(readdirSync(cache), ["0123456789abcdef-1-1-800.png"]);
+});
+
+test("CACHE_SCRIPT stops a Quick Look that never returns, and says there is no thumbnail", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rl-pv-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  // A stand-in qlmanage that hangs, as the real one does on a file it has no thumbnail for.
+  writeFileSync(join(bin, "qlmanage"), "#!/bin/sh\nexec sleep 600\n", { mode: 0o755 });
+  const src = join(dir, "x.bin");
+  writeFileSync(src, Buffer.from([0, 1]));
+  const cache = join(dir, ".cache");
+  const script = CACHE_SCRIPT.replace(`sleep ${QL_SECONDS};`, "sleep 1;");
+  assert.notEqual(script, CACHE_SCRIPT);
+  const started = Date.now();
+  assert.throws(
+    () => execFileSync("sh", ["-c", script, "readlist", src, cache, join(cache, "0123456789abcdef-1-1-800.png"), "0123456789abcdef", "800"],
+      { encoding: "utf8", stdio: "pipe", env: { PATH: `${bin}:/usr/bin:/bin` } }),
+    /Quick Look has no thumbnail for this file/);
+  assert.ok(Date.now() - started < 8000, "returns soon after the watchdog");
+  assert.deepEqual(readdirSync(cache), [], "no temporary folder left");
 });
 
 test("copyText is the path, or the URL", () => {

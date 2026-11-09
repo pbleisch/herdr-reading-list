@@ -1,6 +1,6 @@
 // Installing rl: the producer command ships inside the mod (bin/rl), and the "Install rl"
-// action copies it to ~/.local/bin on this Mac. Pure functions and scripts, shared by the
-// mod and the node tests. See docs/design.md 3.1.
+// action copies it to ~/.local/bin on this Mac, or on another machine Herdr reaches. Pure
+// functions and scripts, shared by the mod and the node tests. See docs/design.md 3.1.
 
 // A line every copy of this rl carries; tells it from another program called rl.
 export const MARK = "rl: put files and URLs on the person's Herdr reading list.";
@@ -52,6 +52,16 @@ export const INSTALL_RL_SCRIPT = [
   'printf "%s\\t%s\\t%s\\t%s\\n" "$result" "$(tilde "$dest")" "$on" "$(tilde "$(command -v rl 2>/dev/null)")"',
 ].join("\n");
 
+// INSTALL_RL_SCRIPT for another machine, where the mod's file is not: $1 is rl's text
+// (read here, passed as an argument), put in a temporary file there and installed from it.
+export const INSTALL_RL_TEXT_SCRIPT = [
+  't=$(mktemp "${TMPDIR:-/tmp}/rl.XXXXXX") || { printf "error\\tno temporary file\\n"; exit 0; }',
+  'trap \'rm -f "$t"\' EXIT',
+  'printf "%s" "$1" > "$t" || { printf "error\\tcould not write %s\\n" "$t"; exit 0; }',
+  'set -- "$t"',
+  INSTALL_RL_SCRIPT,
+].join("\n");
+
 // RL_STATUS_SCRIPT's line as { state, path }; anything unreadable is "unknown" (no banner).
 export function parseRlStatus(stdout) {
   const [state, path = ""] = (stdout ?? "").trim().split("\t");
@@ -73,25 +83,30 @@ export function rlBanner(status) {
   }
 }
 
-// INSTALL_RL_SCRIPT's line as the toast to show: { body, level }.
-export function installToast(stdout) {
+// INSTALL_RL_SCRIPT's line as the toast to show: { body, level }. `machine` names another
+// machine the script ran on (null: this one).
+export function installToast(stdout, machine = null) {
   const [result, dest = "", on = "0", first = ""] = (stdout ?? "").trim().split("\t");
-  const where = on === "1" ? "" : " ~/.local/bin is not on your PATH: add it in your shell profile so agents find rl.";
-  const shadow = on === "1" && first && first !== dest ? ` Another rl comes first on PATH (${first}).` : "";
+  const at = machine ? `${machine}:${dest}` : dest;
+  const there = machine ? ` on ${machine}` : "";
+  const where = on === "1" ? "" : machine
+    ? ` ~/.local/bin is not on PATH${there}: add it in the shell profile there so agents find rl.`
+    : " ~/.local/bin is not on your PATH: add it in your shell profile so agents find rl.";
+  const shadow = on === "1" && first && first !== dest ? ` Another rl comes first on PATH${there} (${first}).` : "";
   switch (result) {
     case "installed":
-      return { body: `Installed rl at ${dest}.${where}${shadow}`, level: on === "1" && !shadow ? "success" : "warning" };
+      return { body: `Installed rl at ${at}.${where}${shadow}`, level: on === "1" && !shadow ? "success" : "warning" };
     case "updated":
-      return { body: `Updated rl at ${dest} to this version.${where}${shadow}`, level: on === "1" && !shadow ? "success" : "warning" };
+      return { body: `Updated rl at ${at} to this version.${where}${shadow}`, level: on === "1" && !shadow ? "success" : "warning" };
     case "same":
-      return { body: `rl at ${dest} is already this version.${where}${shadow}`, level: on === "1" && !shadow ? "info" : "warning" };
+      return { body: `rl at ${at} is already this version.${where}${shadow}`, level: on === "1" && !shadow ? "info" : "warning" };
     case "other":
-      return { body: `${dest} is another program called rl; left as it is. Move it aside and install again.`, level: "warning" };
+      return { body: `${at} is another program called rl; left as it is. Move it aside and install again.`, level: "warning" };
     case "link":
-      return { body: `${dest} is a link to another copy of rl; left as it is.`, level: "warning" };
+      return { body: `${at} is a link to another copy of rl; left as it is.`, level: "warning" };
     case "error":
-      return { body: `Couldn't install rl: ${dest}`, level: "error" };
+      return { body: `Couldn't install rl${there}: ${dest}`, level: "error" };
     default:
-      return { body: `Couldn't install rl: ${(stdout ?? "").trim() || "no answer from the install script"}`, level: "error" };
+      return { body: `Couldn't install rl${there}: ${(stdout ?? "").trim() || "no answer from the install script"}`, level: "error" };
   }
 }

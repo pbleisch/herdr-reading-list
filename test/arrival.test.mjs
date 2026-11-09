@@ -131,8 +131,8 @@ test("applyFilters by space, agent, type and text", () => {
   assert.deepEqual(ids({ text: "x.dev" }), ["report"]);
   assert.deepEqual(ids({ text: "plan shot" }), []);
   assert.deepEqual(ids({ space: "sp1", text: "shot" }), []);
-  // A folder's type comes from the file kind.
-  assert.deepEqual(applyFilters(items, { ...NO_FILTER, type: "folder" }, { "/p/shot.png": "d" }).map((i) => i.title), ["shot.png"]);
+  // A folder's type comes from the file kind, looked up by item key.
+  assert.deepEqual(applyFilters(items, { ...NO_FILTER, type: "folder" }, { [items[1].id]: "d" }).map((i) => i.title), ["shot.png"]);
 });
 
 test("textMatches ignores case and blank text", () => {

@@ -59,10 +59,11 @@ export function cacheName(id, stat, kind, size) {
 }
 
 // One line about a path: `kind mtime size`, kind d (folder), x (executable), f (file); or
-// `-` when it is missing. macOS `stat -f`; Linux `stat -c` as a fallback.
+// `-` when it is missing. GNU stat first: BSD stat rejects -c, while GNU stat -f prints
+// file-system data (and succeeds), so the other order breaks on Linux.
 export const STAT1_SCRIPT = 'p=$1; if [ ! -e "$p" ]; then echo -; exit 0; fi; ' +
   'if [ -d "$p" ]; then k=d; elif [ -x "$p" ]; then k=x; else k=f; fi; ' +
-  'm=$(stat -f "%m %z" "$p" 2>/dev/null || stat -c "%Y %s" "$p"); echo "$k $m"';
+  'm=$(stat -c "%Y %s" -- "$p" 2>/dev/null || stat -f "%m %z" -- "$p" 2>/dev/null); echo "$k ${m:-0 0}"';
 
 export function parseStat(line) {
   const [kind, mtime, size] = (line ?? "").trim().split(/\s+/);
@@ -77,21 +78,28 @@ export const HEAD_SCRIPT = `head -c ${TEXT_BYTES} -- "$1"`;
 // pane can say there are more.
 export const LIST_DIR_SCRIPT = `ls -1Ap -- "$1" | head -n ${FOLDER_ENTRIES + 1}`;
 
+// The longest a Quick Look thumbnail may take.
+export const QL_SECONDS = 20;
+
 // Puts an image for $1 at $3 (inside the cache folder $2), and removes the item's older
 // images ($4 is the item id). $5 is "copy", or the thumbnail size for Quick Look
 // (qlmanage -t, row 28). Several copies of the mod may make the same image at once, so
 // each works in its own hidden temporary folder and renames the result into place.
+// qlmanage never returns for a file Quick Look has no thumbnail for, so it is stopped
+// after QL_SECONDS (its pid only; the watchdog's output is closed so exec does not wait).
 export const CACHE_SCRIPT = [
   'set -u; src=$1; dir=$2; out=$3; id=$4; how=$5',
   'mkdir -p "$dir" && t=$(mktemp -d "$dir/.make.XXXXXX") || exit 1',
   'if [ -f "$out" ]; then :',
   'elif [ "$how" = copy ]; then cp "$src" "$t/copy" && mv "$t/copy" "$out"',
-  'else qlmanage -t -s "$how" -o "$t" "$src" >/dev/null 2>&1',
+  'else qlmanage -t -s "$how" -o "$t" "$src" >/dev/null 2>&1 & q=$!',
+  `  ( sleep ${QL_SECONDS}; kill "$q" 2>/dev/null ) >/dev/null 2>&1 </dev/null & w=$!`,
+  '  wait "$q"; kill "$w" 2>/dev/null',
   '  f=$(ls "$t" | head -n 1)',
   '  [ -n "$f" ] && mv "$t/$f" "$out"',
   'fi',
   'rm -rf "$t"',
-  '[ -f "$out" ] || { echo "Quick Look made no thumbnail" >&2; exit 1; }',
+  '[ -f "$out" ] || { echo "Quick Look has no thumbnail for this file" >&2; exit 1; }',
   'for f in "$dir/$id"-*; do [ -e "$f" ] && [ "$f" != "$out" ] && rm -f "$f"; done',
   'exit 0',
 ].join("\n");

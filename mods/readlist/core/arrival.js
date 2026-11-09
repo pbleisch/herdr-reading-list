@@ -9,6 +9,7 @@
 
 import { NAME } from "./name.js";
 import { who } from "./state.js";
+import { itemKey } from "./items.js";
 
 // Arrivals within this long of the first one collapse into one toast.
 export const BURST_MS = 2500;
@@ -18,8 +19,8 @@ export const CLAIM_MAX = 200;
 // A dropped file's id stays quiet (no toast: the person put it there) this long.
 export const QUIET_MS = 60000;
 
-// An arrival is an item id at an added_at: a re-add is a new arrival.
-export const arrivalKey = (item) => `${item.id}@${item.added_at}`;
+// An arrival is an item (its key) at an added_at: a re-add is a new arrival.
+export const arrivalKey = (item) => `${itemKey(item)}@${item.added_at}`;
 
 // The items that arrived since the listing whose keys are `seen` (null on a copy's first
 // listing, when nothing counts as new). Items added with --kind fyi are listed, never toasted.
@@ -54,7 +55,7 @@ export function owners(map, keys, copy) {
   return out;
 }
 
-// shared("readlist.quiet"): item id -> ms. Adds `ids` and drops old entries.
+// shared("readlist.quiet"): item key -> ms. Adds `ids` (keys) and drops old entries.
 export function quiet(map, ids, nowMs) {
   const next = Object.fromEntries(entries(map).filter(([, at]) => typeof at === "number" && nowMs - at < QUIET_MS));
   for (const id of ids) next[id] = nowMs;
