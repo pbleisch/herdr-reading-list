@@ -1,7 +1,7 @@
 #!/bin/sh
 # rl: put files and URLs on the person's Herdr reading list.
 #
-#   rl add <path|url> [--note TEXT] [--title TEXT] [--from NAME] [--kind review|fyi|result]
+#   rl add <path|url> [--note TEXT] [--title TEXT] [--from NAME] [--kind review|fyi|result] [--if-new]
 #   rl ls [--unread | --done | --all] [--json]
 #   rl done <path|url|id>
 #   rl rm <path|url|id>
@@ -15,10 +15,13 @@ set -u
 usage() {
 	cat <<'EOF'
 usage:
-  rl add <path|url> [--note TEXT] [--title TEXT] [--from NAME] [--kind review|fyi|result]
+  rl add <path|url> [--note TEXT] [--title TEXT] [--from NAME] [--kind review|fyi|result] [--if-new]
   rl ls [--unread | --done | --all] [--json]
   rl done <path|url|id>
   rl rm <path|url|id>
+
+Adding a path or URL that is already on the list replaces its item (unread again, at the
+top); with --if-new it leaves that item as it is and only prints its id.
 
 The list lives in $READING_LIST_DIR (default ~/.local/state/reading-list).
 EOF
@@ -258,7 +261,7 @@ attribution() {
 }
 
 cmd_add() {
-	OPT_NOTE='' OPT_TITLE='' OPT_FROM='' OPT_KIND=review target=''
+	OPT_NOTE='' OPT_TITLE='' OPT_FROM='' OPT_KIND=review OPT_IF_NEW=0 target=''
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--note) [ $# -ge 2 ] || die "--note needs a value"; OPT_NOTE=$2; shift 2 ;;
@@ -269,6 +272,7 @@ cmd_add() {
 		--from=*) OPT_FROM=${1#--from=}; shift ;;
 		--kind) [ $# -ge 2 ] || die "--kind needs a value"; OPT_KIND=$2; shift 2 ;;
 		--kind=*) OPT_KIND=${1#--kind=}; shift ;;
+		--if-new) OPT_IF_NEW=1; shift ;;
 		--) shift; [ $# -ge 1 ] && { target=$1; shift; }; break ;;
 		-*) die "unknown option for add: $1" ;;
 		*) [ -z "$target" ] || die "add takes one path or URL"; target=$1; shift ;;
@@ -303,6 +307,10 @@ cmd_add() {
 		m=$(mtime_epoch "$real") && m=$(epoch_iso "$m") && I_MTIME="\"$m\""
 	fi
 
+	if [ "$OPT_IF_NEW" = 1 ] && [ -f "$ITEMS/$I_ID.json" ]; then
+		printf '%s\n' "$I_ID"
+		return 0
+	fi
 	I_ADDS=1
 	if [ -f "$ITEMS/$I_ID.json" ]; then
 		old=$(json_flat "$ITEMS/$I_ID.json" | pick adds)

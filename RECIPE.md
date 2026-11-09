@@ -6,8 +6,10 @@ it is, the note and who added it. The person walks the list with the keyboard, s
 the selected item beside the list (rendered markdown, highlighted code, images, Quick Look
 thumbnails of HTML and PDF), opens it in its macOS app with Enter, and marks it done. Agents on
 other machines Herdr reaches add to that machine's own list, which shows here too: their files
-are previewed in place or fetched into a local copy to open. It lives in a pane, in the left
-sidebar, or as a popup on `cmd-shift-i`. macOS only.
+are previewed in place or fetched into a local copy to open. When the person turns it on, files
+Claude Code agents send them with their SendUserFile tool arrive on the list too, without the agent
+running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shift-i`. macOS only.
+`skill/reading-list/SKILL.md` is an agent skill that teaches agents when and how to add.
 
 ![Reading list](preview.png)
 
@@ -72,9 +74,10 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   copies the path or URL (with a toast); `r` read/unread; `d` done (Tab switches to the Done view,
   where `d` or `u` brings it back); Shift-D deletes the item file (no undo); `/` opens a filter box
   (title, note, path; Enter or Down back to the list, Esc clears); `f` opens the filter menu (a
-  250-wide popup with sections Space, Agent, Type and Show (All items / Unread only), each option with its count, a check on the chosen one; `j`/`k`, Enter); Shift-R lists
+  250-wide popup with sections Space, Agent, Type and Show (All items / Unread only), each option with its count, a check on the chosen one, and in the list view a last section "Also add" with
+  one entry, "Files Claude Code sends", checked while that source is on; `j`/`k`, Enter); Shift-R lists
   this machine and every other one again now. Each is also a command,
-  `readlist.<down|up|top|bottom|open|preview|pane|reveal|copy|read|done|undo|delete|view|find|filter|viewer|focus|install-rl|refresh>`,
+  `readlist.<down|up|top|bottom|open|preview|pane|reveal|copy|read|done|undo|delete|view|find|filter|viewer|focus|install-rl|refresh|claude-files>`,
   which only the copy that had the keyboard last acts on (else the sidebar's).
 - **Opening**: files open with `open`; executable items (`.app`, scripts, `.command`, anything with
   an execute bit, installers) are revealed in Finder instead, with a toast saying why. Links open in
@@ -82,6 +85,23 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - **Re-adding** the same path makes it unread and moves it to the top; `adds` counts.
 - **Drop folder**: anything put in the list folder's `inbox/`, or dropped onto the list, is added
   (from "inbox" or "dropped"); the file stays where it is.
+- **Files Claude Code sends** (off until turned on with the `f` menu's "Files Claude Code sends" or
+  `readlist.claude-files`, which toggles it and toasts the new setting): for each Claude Code agent
+  on this Mac in `agents()`, `hc get <t> --json` gives the terminal's foreground pid; Claude Code's
+  `sessions/<pid>.json` (in `$CLAUDE_CONFIG_DIR` or `~/.claude`; the pid's children and
+  grandchildren are tried too) gives the session id, and `projects/*/<session id>.jsonl` is the
+  transcript. One `sh` script reads every transcript's lines containing `file_uuid` (skipping
+  lines over 256 KiB, and skipping a transcript whose size and mtime are unchanged since this
+  copy last read it); the mod keeps the tool results whose `toolUseResult.attachments` list
+  delivered files. Each delivered file is added with the mod's `rl add --if-new --kind result`,
+  the send's caption as the note, the agent's terminal looked up as for an agent running `rl`, and
+  "Claude Code t7" as the `--from` fallback. Only sends made since the setting was turned on are
+  added, and each once: `state.json`'s `claude_files` keeps, per session, the time of the latest
+  send handled, and a file already on the list (added with `rl`, or sent before) is left as it is.
+  A file that is gone, a missing or malformed session file or transcript, or an agent without a
+  session is skipped quietly. It reads transcripts when a Claude Code agent comes, goes or changes
+  state and every 30 s, while a copy of the list is shown; sends of a session that ended while no
+  copy was shown are not added. Agents on other machines are not read.
 - **Install rl**: the button (or `readlist.install-rl`) copies the mod's `bin/rl` to
   `~/.local/bin/rl` and toasts the result: installed, updated an older copy, already this version,
   `~/.local/bin` not on PATH, another `rl` first on PATH, or "another program called rl; left as it
@@ -116,13 +136,19 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   menu). `core/*.js` are pure functions and shell scripts, node-tested: `items.js` (parse, types,
   open action), `state.js` (read/done state), `filters.js`, `arrival.js` (toast claims),
   `inbox.js`, `preview.js`, `viewer.js`, `install.js`, `remote.js` (the poll, each machine's
-  online/offline state, local copies). `icons/` are Lucide SVGs (ISC).
+  online/offline state, local copies), `sent.js` (files Claude Code agents sent: the transcript
+  scan, the record of what was added). `icons/` are Lucide SVGs (ISC).
 - `mods/readlist/bin/rl`: the producer, POSIX `sh` and `awk`. Writes `items/<id>.json` atomically
   (temp file, `mv`); id = first 16 hex of SHA-256 of the real path or URL; fills `by` from
-  `hc get $HC_TERMINAL_ID --json` inside a Herdr terminal.
+  `hc get $HC_TERMINAL_ID --json` inside a Herdr terminal. `--if-new` leaves an item already on the
+  list as it is.
+- `skill/reading-list/SKILL.md`: the agent skill (frontmatter `name` and `description`): when to
+  add (deliverables, reports, results, decisions; not routine progress), the kinds, a useful note,
+  `--from`, and the no-install JSON fallback.
 - The list folder: `$READING_LIST_DIR` or `~/.local/state/reading-list/`: `items/`, `inbox/`,
-  `state.json` (per item `read_at`, `done_at`, `undone_at`, `seen_mtime`, and the inbox entries added, written only by the mod with
-  `writeTextFile`'s compare-and-swap).
+  `state.json` (per item `read_at`, `done_at`, `undone_at`, `seen_mtime`, the inbox entries added,
+  and `claude_files`: `on`, `since` and per session the latest send handled; written only by the
+  mod with `writeTextFile`'s compare-and-swap).
 - `herdr`: `exec` (`sh -c` scripts with arguments, `open`, `qlmanage -p` and `-t`; with `on` for
   other machines), `hc` (`machine ls`, for `scp`'s target), `machines`, `readTextFile`,
   `writeTextFile`, `watchFolder`, `nextCommand`, `agents`, `spaces`, `panes`, `focused`, `theme`,
@@ -132,7 +158,7 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   `gpui-base`: `v_virtual_list`, `Scrollbar`, `TextView.markdown`, `EditorState`/`Editor`,
   `InputState`/`Input`.
 - `keys.json`: `"global": {"cmd-shift-i": "mod.open:readlist"}`.
-- Programs it runs: `sh`, `open`, `qlmanage`, `stat`, `head`, `ls`, `cp`, `mv`, `rm`, `ps`/`kill`
+- Programs it runs: `sh`, `open`, `qlmanage`, `stat`, `head`, `ls`, `cp`, `mv`, `rm`, `ps`/`kill`, `pgrep`, `grep`, `awk`, `sed`
   (only the Quick Look panel or thumbnail it started), `base64`, `hc`, `scp` and `shasum` (through
   `rl`); on other machines, through Herdr, `sh`, `cat`, `stat`, `head`, `ls`, `base64`, `dd`, `rm`
   and `cp`/`mv` (installing `rl`). No network beyond Herdr's own connections and `scp`.
@@ -162,6 +188,12 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   its pid), or the preview waits for `exec`'s timeout.
 - A poll whose output lacks the final "end" record (cut short) is not a listing: keep the items.
 - The review hand-off (`R`) is not built; nothing shows for it.
+- Claude Code transcripts grow to tens of MB and `readTextFile` stops at 1 MiB: read them with
+  `grep` in a script, never in the mod. A transcript also holds lines that merely mention
+  `file_uuid` (a file the agent read, a command's output): only a `user` line whose
+  `toolUseResult.attachments` carry a `file_uuid` is a delivered send.
+- Writing `state.json` lists the folder again (it is watched): the transcript scan writes only when
+  it added something, saw a new session, or a session's record is a day old.
 
 ## Done when
 
@@ -177,3 +209,6 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - With no `rl` on PATH the banner shows; Install rl puts `~/.local/bin/rl` in place (mode 755) and
   says so; with a different file already at `~/.local/bin/rl` it leaves it and says so.
 - A file copied into `~/.local/state/reading-list/inbox/` appears as an item from "inbox".
+- With "Files Claude Code sends" off, a Claude Code agent's SendUserFile adds nothing. Turned on, a
+  file the agent sends next appears as a `result` item with the caption as its note, naming that
+  agent; sending a file that is already on the list leaves its item as it is.

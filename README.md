@@ -22,7 +22,8 @@ checks the mod. To do it by hand, copy the `mods/readlist` folder there yourself
 `keys.json` to your own `keys.json`, and run `herdr-app check ~/.config/herdr-app/mods/readlist`.
 
 What the mod does on your Mac: it runs programs (`sh` scripts, `open`, `qlmanage` for Quick Look
-and thumbnails, and its own `rl`), reads the files on the list wherever they are, and writes only
+and thumbnails, and its own `rl`), reads the files on the list wherever they are (and, only if
+you turn on "Files Claude Code sends", Claude Code's session files and transcripts), and writes only
 its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin/rl`. On other
 machines Herdr reaches, it reads their list folder and the files on it through Herdr every 15 s,
 copies a file into its `.cache/` when you open or preview it, removes an item file on Shift-D, and
@@ -52,10 +53,35 @@ Agents without `rl` can still add items by writing a small JSON file; see
 
 ### Teach your agents
 
-[skill/reading-list/SKILL.md](skill/reading-list/SKILL.md) is a skill for coding agents: when to
-add something (only what you should read), the `rl` commands, and the no-install fallback. Copy the
-`skill/reading-list` folder into your agent's skills folder (for Claude Code,
-`~/.claude/skills/reading-list`), or paste its text into your agent instructions.
+[skill/reading-list/SKILL.md](skill/reading-list/SKILL.md) is a standard agent skill (a folder with
+a `SKILL.md` that has `name` and `description` frontmatter). It tells an agent:
+
+- when to add: deliverables, reports, results and plans waiting for your call, and not routine
+  progress, scratch files or every save;
+- which kind to use: `review` (please read), `result` (what a task produced) or `fyi` (no toast);
+- how to write a note that says what the item is and what the agent wants from you;
+- `--from NAME` when it runs outside a Herdr terminal, and the no-install JSON fallback.
+
+To install it, copy the `skill/reading-list` folder into your agent's skills folder, for example
+`~/.claude/skills/reading-list` (Claude Code, every project) or `.claude/skills/reading-list` in
+one project; other agents that read skills take the same folder in theirs. An agent without
+skills can be given the file's text in its instructions instead.
+
+### Files Claude Code sends
+
+Claude Code agents can already send you a file with their SendUserFile tool. Turn on **Files
+Claude Code sends** (in the `f` filter menu, under "Also add", or
+`herdr-app do readlist.claude-files`) and every file a Claude Code agent on this Mac sends from
+then on also lands on the list, as a `result` from that agent with the send's caption as the note,
+without the agent running `rl`. It is off until you turn it on; the same entry turns it off.
+
+The list finds each Claude Code agent's session the way Claude Code records it
+(`~/.claude/sessions/` and the session transcript under `~/.claude/projects/`, or
+`$CLAUDE_CONFIG_DIR`) and reads only the transcript lines that record a delivered file. Each file
+is added once: a file already on the list (added with `rl`, or sent before) stays as it is, and a
+send stays handled after you delete its item. Transcripts are read while the list is shown in a
+pane, the sidebar or the popup; sends of a session that ended while it was not shown are missed.
+Agents on other machines are not read.
 
 ## Use
 
@@ -65,6 +91,7 @@ rl add https://example.com/report --kind fyi     # fyi: no toast
 rl ls                 # open items; --unread, --done, --all, --json
 rl done docs/plan.md  # you have handled it
 rl rm docs/plan.md    # take it off the list
+rl add out/report.html --kind result --if-new   # only if it is not on the list yet
 ```
 
 The list lives in `~/.local/state/reading-list/` (`$READING_LIST_DIR` overrides it): one JSON file
@@ -95,7 +122,7 @@ In the list:
 | `d` | done (Tab shows the Done view, where `d` or `u` brings it back) |
 | Shift-D | delete the item from the list (like `rl rm`; the file stays) |
 | `/` | filter by title, note and path |
-| `f` | filter menu: space, agent, type, unread only |
+| `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch |
 | Shift-R | list this machine and every other one again now |
 
 Each key is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can bind in

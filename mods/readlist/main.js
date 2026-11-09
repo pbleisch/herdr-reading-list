@@ -6,7 +6,8 @@
 // the cache to be opened or drawn (core/remote.js).
 // Lives in the left sidebar under Agents (props {role: "sidebar"}), in a pane, or as the
 // popup (mod.open:readlist, cmd-shift-i). Props {role: "viewer"} is the preview-only pane
-// `v` opens; props {menu} is a filter menu one of the others opened.
+// `v` opens; props {menu} is a filter menu one of the others opened. When the person turns
+// it on, files Claude Code agents here send with SendUserFile are added too (core/sent.js).
 // See docs/design.md in the herdr-reading-list repo.
 
 import { View, div, svg, image } from "gpui-kit";
@@ -18,6 +19,7 @@ import { parseState, serializeState, applyAction, prune, rowsFor, counts, ago, w
 import { NO_FILTER, applyFilters, filterRows, isFiltered, options, labelFor } from "./core/filters.js";
 import { BURST_MS, arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction } from "./core/arrival.js";
 import { INBOX_SCRIPT, ADD_SCRIPT, parseInbox, inboxPlan } from "./core/inbox.js";
+import { SCAN_SCRIPT, SENT_ADD_SCRIPT, isClaudeAgent, foregroundPid, parseScan, sentPlan, sentOn, setSent, sentAddArgs } from "./core/sent.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "./core/viewer.js";
 import { NAME } from "./core/name.js";
 import { RL_STATUS_SCRIPT, INSTALL_RL_SCRIPT, INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
@@ -62,7 +64,7 @@ const DOUBLE_MS = 500;
 
 const DIR_SCRIPT = 'd=${READING_LIST_DIR:-$HOME/.local/state/reading-list}; mkdir -p "$d/items" "$d/inbox" && cd "$d" && pwd -P';
 
-const MENU_TITLE = { space: "Space", agent: "Agent", type: "Type", unread: "Show" };
+const MENU_TITLE = { space: "Space", agent: "Agent", type: "Type", unread: "Show", sources: "Also add" };
 const ALL = { space: "All spaces", agent: "All agents", type: "All types" };
 const MENU_ROW = 29, MENU_HEAD = 25;
 
@@ -138,6 +140,10 @@ export default class ReadingList extends View {
     // Arrivals waiting for their burst to end (arrival key -> item).
     this.pending = new Map();
     this.reclaims = 0;
+    // Files Claude Code agents sent (core/sent.js): each agent's transcript as last read
+    // (address -> { sig, session, sends }), and the agents' addresses and states then.
+    this.sentCache = new Map();
+    this.agentKey = "";
     this.scroll = VirtualListScrollHandle.new();
     cx.spawn(async (cx) => {
       try {
@@ -174,6 +180,15 @@ export default class ReadingList extends View {
       else cx.notify();
       // rl may have been installed (or removed) from a terminal.
       this.checkRl(cx);
+      this.scanSent(cx);
+    });
+    // An agent's send usually ends or pauses its turn: read the transcripts again when a
+    // Claude Code agent comes or goes or changes state.
+    cx.timer.every(3000, (cx) => {
+      const key = agents().filter(isClaudeAgent).map((a) => `${a.address}:${a.status}`).join(" ");
+      if (key === this.agentKey) return;
+      this.agentKey = key;
+      this.scanSent(cx);
     });
   }
 
@@ -313,7 +328,9 @@ export default class ReadingList extends View {
         this.localSt = st;
         this.merge();
         this.gen++;
+        const wasOn = sentOn(this.state);
         this.state = parseState(stateText);
+        if (sentOn(this.state) && !wasOn) this.scanSent(cx);
         this.error = null;
         this.loaded = true;
         this.arrived(null, this.local, cx);
@@ -611,6 +628,107 @@ export default class ReadingList extends View {
     const r = await exec("sh", ["-c", ADD_SCRIPT, "readlist", `${appHome()}/${RL}`, from, ...paths]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
     if (r.code !== 0) notify({ title: "Reading list", body: `Couldn't add to the list: ${r.stderr.trim()}`, level: "error" });
     return r.stdout.split("\n").map((l) => l.trim()).filter((l) => /^[0-9a-f]{16}$/.test(l));
+  }
+
+  // ---- files Claude Code agents sent (core/sent.js) ----
+
+  // Reads the transcripts of the Claude Code agents here and adds the files they sent since
+  // the person turned this on, each by one copy only (the one whose state.json write
+  // recorded the send). One scan at a time, and one more if asked meanwhile.
+  scanSent(cx) {
+    if (this.role() === "viewer" || !this.dir || !sentOn(this.state)) return;
+    if (this.sentBusy) {
+      this.sentAgain = true;
+      return;
+    }
+    this.sentBusy = true;
+    cx.spawn(async () => {
+      try {
+        do {
+          this.sentAgain = false;
+          await this.scanSentOnce();
+        } while (this.sentAgain);
+      } catch (e) {
+        console.log(`readlist: reading Claude Code transcripts failed: ${String(e?.message ?? e)}`);
+      } finally {
+        this.sentBusy = false;
+      }
+    });
+  }
+
+  async scanSentOnce() {
+    const claude = agents().filter(isClaudeAgent);
+    for (const address of this.sentCache.keys()) if (!claude.some((a) => a.address === address)) this.sentCache.delete(address);
+    if (!claude.length) return;
+    const pids = await Promise.all(claude.map((a) => hc(["get", a.address, "--json"]).then((r) => foregroundPid(r.stdout), () => null)));
+    const args = [];
+    claude.forEach((a, n) => {
+      if (pids[n]) args.push(a.address, String(pids[n]), this.sentCache.get(a.address)?.sig ?? "");
+    });
+    if (!args.length) return;
+    const r = await exec("sh", ["-c", SCAN_SCRIPT, "readlist", "", ...args]);
+    const scan = [];
+    for (const s of parseScan(r.stdout)) {
+      const had = this.sentCache.get(s.address);
+      if (s.same && had?.session !== s.session) {
+        // Unchanged, but not the session this copy read last: read it in full next time.
+        this.sentCache.delete(s.address);
+        this.sentAgain = true;
+        continue;
+      }
+      const sends = s.same ? had.sends : s.sends;
+      this.sentCache.set(s.address, { sig: s.sig, session: s.session, sends });
+      scan.push({ ...s, sends });
+    }
+    const path = `${this.dir}/state.json`;
+    let todo = [];
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const text = await readTextFile(path);
+      const st = parseState(text);
+      const plan = sentPlan(scan, st.claude_files, Date.now());
+      if (!plan.changed) break;
+      try {
+        await writeTextFile(path, serializeState({ ...st, claude_files: plan.record }), text);
+        todo = plan.todo;
+        break;
+      } catch {
+        // Another copy wrote first: read again (it may have taken these sends).
+      }
+    }
+    if (!todo.length) return;
+    const a = await exec("sh", ["-c", SENT_ADD_SCRIPT, "readlist", `${appHome()}/${RL}`, ...sentAddArgs(todo)]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+    if (a.code !== 0) notify({ title: "Reading list", body: `Couldn't add a file Claude Code sent: ${a.stderr.trim()}`, level: "warning" });
+  }
+
+  // The f menu's "Files Claude Code sends" (readlist.claude-files): turns the source on or off.
+  toggleSent(cx) {
+    if (!this.dir) return;
+    const path = `${this.dir}/state.json`;
+    cx.spawn(async (cx) => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const text = await readTextFile(path);
+        const st = parseState(text);
+        const on = !sentOn(st);
+        const next = setSent(st, on, nowIso());
+        try {
+          await writeTextFile(path, serializeState(next), text);
+        } catch {
+          // Another copy wrote first: read again.
+          continue;
+        }
+        this.state = next;
+        notify({
+          title: "Reading list",
+          body: on ? "Files your Claude Code agents send you are added to the list from now on." : "Files Claude Code agents send are no longer added.",
+          level: "info",
+          timeout: 4000,
+        });
+        if (on) this.scanSent(cx);
+        cx.notify();
+        return;
+      }
+      notify({ title: "Reading list", body: "Couldn't save the setting; try again.", level: "warning" });
+    });
   }
 
   // Files dropped onto the list: added from "dropped", without a toast (the person put them
@@ -930,18 +1048,21 @@ export default class ReadingList extends View {
     const ctx = { fs: this.fs, spaces: spaces(), agents: agents() };
     const sections = dims.map((dim) => dim === "unread"
       ? { dim, title: MENU_TITLE.unread, value: this.f.unread, options: [{ value: false, label: "All items" }, { value: true, label: "Unread only" }] }
-      : { dim, title: MENU_TITLE[dim], value: this.f[dim], options: [{ value: null, label: ALL[dim] }, ...options(pool, dim, { ...ctx, chosen: this.f[dim] })] });
+      : dim === "sources"
+        ? { dim, title: MENU_TITLE.sources, value: sentOn(this.state), options: [{ value: true, label: "Files Claude Code sends" }] }
+        : { dim, title: MENU_TITLE[dim], value: this.f[dim], options: [{ value: null, label: ALL[dim] }, ...options(pool, dim, { ...ctx, chosen: this.f[dim] })] });
     const rows = sections.reduce((n, s) => n + s.options.length, 0);
     const height = Math.min(440, 12 + sections.length * MENU_HEAD + rows * MENU_ROW);
     openOverlay({ mod: NAME, kind: "popup", width: 250, height, props: { menu: sections, target: this.copy } });
   }
 
   // A pick from a filter menu this copy opened.
-  takePick() {
+  takePick(cx) {
     const pk = shared(PICK);
     if (!pk || pk.target !== this.copy || pk.n === this.pickN) return;
     this.pickN = pk.n;
-    if (pk.dim in this.f) this.f = { ...this.f, [pk.dim]: pk.dim === "unread" ? Boolean(pk.value) : pk.value ?? null };
+    if (pk.dim === "sources") this.toggleSent(cx);
+    else if (pk.dim in this.f) this.f = { ...this.f, [pk.dim]: pk.dim === "unread" ? Boolean(pk.value) : pk.value ?? null };
   }
 
   clearFilters() {
@@ -1020,12 +1141,13 @@ export default class ReadingList extends View {
         break;
       case "filter":
         if (this.rail()) return false;
-        this.openMenu(["space", "agent", "type", ...(this.view === "list" ? ["unread"] : [])]);
+        this.openMenu(["space", "agent", "type", ...(this.view === "list" ? ["unread", "sources"] : [])]);
         break;
       case "viewer": this.toggleViewer(cur, cx); break;
       case "focus": this.focus(); break;
       case "install-rl": this.installRl(cx); break;
       case "refresh": this.refresh(cx); break;
+      case "claude-files": this.toggleSent(cx); break;
       default: return false;
     }
     cx.notify();
@@ -1197,7 +1319,7 @@ export default class ReadingList extends View {
   render(cx) {
     if (props()?.menu) return this.renderMenu(cx);
     if (this.role() === "viewer") return this.renderViewer(cx);
-    this.takePick();
+    this.takePick(cx);
     const t = theme();
     const rail = this.rail();
     const sidebar = this.role() === "sidebar";
@@ -1321,7 +1443,7 @@ export default class ReadingList extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { this.f = { ...this.f, unread: !this.f.unread }; cx.notify(); })
       .child("Unread");
-    const menuDims = ["space", "agent", "type", ...(this.view === "list" ? ["unread"] : [])];
+    const menuDims = ["space", "agent", "type", ...(this.view === "list" ? ["unread", "sources"] : [])];
     const filterIcon = div().id("rl-filter").flex_none().cursor_pointer().text_color(filtered ? t.accent : t.dim)
       .hover((s) => s.text_color(t.foreground))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())

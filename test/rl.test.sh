@@ -53,6 +53,15 @@ id2=$("$RL" add "$scratch/docs/sub dir/plan.md" --kind fyi --title "Plan v2" --f
 eq "$id2" "$id" "same path, same id"
 eq "$(q "$f" '[o.adds, o.note, o.kind, o.title, o.by.from]')" '[2,null,"fyi","Plan v2","ci job"]' "re-add replaces fields and counts"
 
+# --if-new: an item already on the list stays as it is; a new one is added as usual.
+before=$(cat "$f")
+eq "$("$RL" add "$scratch/docs/sub dir/plan.md" --if-new --note other --kind result)" "$id" "--if-new prints the id of the item there"
+eq "$(cat "$f")" "$before" "--if-new leaves that item unchanged"
+printf 'x\n' >"$scratch/docs/new.txt"
+nid=$("$RL" add "$scratch/docs/new.txt" --if-new --kind result --note "fresh")
+eq "$(q "$READING_LIST_DIR/items/$nid.json" '[o.adds, o.kind, o.note]')" '[1,"result","fresh"]' "--if-new adds a new item"
+"$RL" rm "$nid" >/dev/null
+
 # errors
 "$RL" add "$scratch/nope.md" 2>/dev/null
 eq "$?" 1 "missing file exits 1"

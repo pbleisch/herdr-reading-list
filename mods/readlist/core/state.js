@@ -3,16 +3,18 @@
 // See docs/design.md 4.3.
 //
 // state.json: { "v": 1, "items": { "<key>": { "read_at"?, "done_at"?, "undone_at"?, "seen_mtime"? } },
-//               "inbox"?: { "<name>": mtime } }
+//               "inbox"?: { "<name>": mtime }, "claude_files"?: { ... } }
 // An item is read when read_at is at or after its added_at (re-adding makes it unread
 // again). It is done when the latest done mark - the item's own done_at (rl done) or
 // the state's - is at or after both added_at and the state's undone_at. The mod sets
 // done_at or undone_at and clears the other, so the latest action wins. seen_mtime is the
 // file's mtime (epoch seconds) when it was read, so a row can say "changed" after that.
-// "inbox" is the drop folder's record (core/inbox.js). An item's key is its id, or
+// "inbox" is the drop folder's record (core/inbox.js), "claude_files" the setting and record
+// of the files Claude Code agents sent (core/sent.js). An item's key is its id, or
 // `<machine>/<id>` for another machine's item (core/items.js itemKey).
 
 import { itemKey } from "./items.js";
+import { parseSent } from "./sent.js";
 
 const ms = (t) => (t ? Date.parse(t) : NaN);
 const at = (t) => (Number.isNaN(ms(t)) ? -Infinity : ms(t));
@@ -39,13 +41,15 @@ export function parseState(text) {
     const kept = Object.fromEntries(Object.entries(inbox).filter(([, m]) => Number.isFinite(m)));
     if (Object.keys(kept).length) state.inbox = kept;
   }
+  if (raw && raw.v === 1 && raw.claude_files) state.claude_files = parseSent(raw.claude_files);
   return state;
 }
 
 // The state with the drop folder's record replaced (an empty record is left out).
 export function withInbox(state, inbox) {
-  const next = { v: 1, items: state.items };
+  const next = { ...state };
   if (Object.keys(inbox).length) next.inbox = inbox;
+  else delete next.inbox;
   return next;
 }
 
