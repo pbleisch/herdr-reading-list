@@ -1,0 +1,7 @@
+# Written by herdr-app (check, and the app when it loads the mod)
+mods/readlist/gpui-kit.d.ts
+mods/readlist/jsconfig.json
+# Image and thumbnail cache
+mods/readlist/.cache/
+node_modules/
+.DS_Store

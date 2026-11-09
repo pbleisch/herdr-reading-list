@@ -1,0 +1,73 @@
+#!/bin/sh
+# Dev install on this Mac:
+#   1. copies mods/readlist into the Herdr app's mods/readlist (a copy: a symlinked mod
+#      neither hot-reloads nor writes) and checks it;
+#   2. adds the keys in keys.json (cmd-shift-i opens the popup) to the person's keys.json
+#      where they are free, never replacing a key in use;
+#   3. unless --no-link, links mods/readlist/bin/rl into ~/.local/bin;
+#   4. unless --no-layout, clones the shown layout as <name>-readlist, puts the reading
+#      list under Agents in the clone, and switches to it. Shipped layouts are read-only,
+#      and the person's own layout is left as it was (ctrl-shift-l switches back).
+# Run it again after pulling to update the mod; the layout step is skipped when the
+# shown layout already has the reading list.
+
+set -eu
+
+layout=1
+link=1
+for arg in "$@"; do
+	case $arg in
+	--no-layout) layout=0 ;;
+	--no-link) link=0 ;;
+	*)
+		echo "usage: bin/install-dev [--no-layout] [--no-link]" >&2
+		exit 2
+		;;
+	esac
+done
+
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+app=${HERDR_APP_HOME:-$HOME/.config/herdr-app}
+mods=$app/mods
+
+[ -d "$mods" ] || {
+	echo "install-dev: no Herdr app folder at $app" >&2
+	exit 1
+}
+
+mkdir -p "$mods/readlist"
+rsync -a --delete --exclude .cache --exclude jsconfig.json --exclude "*.d.ts" "$repo/mods/readlist/" "$mods/readlist/"
+herdr-app check "$mods/readlist"
+
+[ -f "$app/keys.json" ] && node "$repo/bin/merge-keys.mjs" "$repo/keys.json" "$app/keys.json"
+
+if [ "$link" = 1 ]; then
+	mkdir -p "$HOME/.local/bin"
+	rl=$HOME/.local/bin/rl
+	if [ -e "$rl" ] && [ ! -L "$rl" ]; then
+		echo "install-dev: $rl exists and is not a link; leaving it" >&2
+	else
+		ln -sfn "$repo/mods/readlist/bin/rl" "$rl"
+		echo "linked $rl -> $repo/mods/readlist/bin/rl"
+	fi
+fi
+
+[ "$layout" = 1 ] || exit 0
+
+shown=$(herdr-app status | sed -n 's/^ *"layout": *"\([^"]*\)".*/\1/p')
+[ -n "$shown" ] || {
+	echo "install-dev: could not tell which layout is shown (is Herdr running?)" >&2
+	exit 1
+}
+if grep -q '"mod": *"readlist"' "$app/layouts/$shown.json" 2>/dev/null; then
+	echo "layout $shown already has the reading list"
+	exit 0
+fi
+clone=$shown-readlist
+if [ -f "$app/layouts/$clone.json" ]; then
+	herdr-app "do" layout.switch --name "$clone" >/dev/null
+else
+	herdr-app "do" layout.clone --name "$shown" --as "$clone" >/dev/null
+fi
+node "$repo/layout/add-to-sidebar.mjs" "$app/layouts/$clone.json"
+echo "showing layout $clone; ctrl-shift-l switches back to $shown"

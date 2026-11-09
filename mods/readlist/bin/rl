@@ -1,0 +1,425 @@
+#!/bin/sh
+# rl: put files and URLs on the person's Herdr reading list.
+#
+#   rl add <path|url> [--note TEXT] [--title TEXT] [--from NAME] [--kind review|fyi|result]
+#   rl ls [--unread | --done | --all] [--json]
+#   rl done <path|url|id>
+#   rl rm <path|url|id>
+#
+# Each item is one JSON file, items/<id>.json, under $READING_LIST_DIR
+# (default ~/.local/state/reading-list). See docs/design.md, section 3.
+# POSIX sh and awk only, so it runs on any machine Herdr reaches.
+
+set -u
+
+usage() {
+	cat <<'EOF'
+usage:
+  rl add <path|url> [--note TEXT] [--title TEXT] [--from NAME] [--kind review|fyi|result]
+  rl ls [--unread | --done | --all] [--json]
+  rl done <path|url|id>
+  rl rm <path|url|id>
+
+The list lives in $READING_LIST_DIR (default ~/.local/state/reading-list).
+EOF
+}
+
+die() {
+	printf 'rl: %s\n' "$*" >&2
+	exit 1
+}
+
+DIR=${READING_LIST_DIR:-${HOME:?}/.local/state/reading-list}
+ITEMS=$DIR/items
+STATE=$DIR/state.json
+
+# A JSON string literal for $1: quotes, backslashes and control characters escaped.
+json_str() {
+	printf '%s' "$1" | awk '
+		BEGIN {
+			for (i = 1; i < 32; i++) ctl[sprintf("%c", i)] = sprintf("\\u%04x", i)
+			ctl["\t"] = "\\t"; ctl["\n"] = "\\n"; ctl["\r"] = "\\r"
+		}
+		{ s = s (NR > 1 ? "\n" : "") $0 }
+		END {
+			out = ""; n = length(s)
+			for (i = 1; i <= n; i++) {
+				c = substr(s, i, 1)
+				if (c == "\\") out = out "\\\\"
+				else if (c == "\"") out = out "\\\""
+				else if (c in ctl) out = out ctl[c]
+				else out = out c
+			}
+			printf "\"%s\"", out
+		}'
+}
+
+# Flattens JSON documents to "path<TAB>token" lines, one per scalar, where path
+# joins object keys and array indexes with "/" ("by/terminal", "labels/herdr.space")
+# and token is the value as written (strings keep their quotes and escapes, so a
+# token can be written back into JSON unchanged). Each file starts with a
+# "@<TAB>file name" line. A later duplicate key wins, as in JSON.parse.
+json_flat() {
+	awk '
+		function flush() { if (FNR_SEEN) { pos = 1; n = length(buf); val(""); } buf = "" }
+		FNR == 1 { flush(); FNR_SEEN = 1; printf "@\t%s\n", FILENAME }
+		{ buf = buf $0 "\n" }
+		END { flush() }
+		function skip() { while (pos <= n && index(" \t\r\n", substr(buf, pos, 1))) pos++ }
+		function str(   start, c) {
+			start = pos; pos++
+			while (pos <= n) {
+				c = substr(buf, pos, 1)
+				if (c == "\\") { pos += 2; continue }
+				pos++
+				if (c == "\"") return substr(buf, start, pos - start)
+			}
+			pos = n + 1; return ""
+		}
+		function val(path,   c, k, i, start) {
+			skip(); if (pos > n) return
+			c = substr(buf, pos, 1)
+			if (c == "{") {
+				pos++; skip()
+				if (substr(buf, pos, 1) == "}") { pos++; return }
+				while (pos <= n) {
+					skip(); k = str(); k = substr(k, 2, length(k) - 2)
+					skip(); pos++
+					val(path == "" ? k : path "/" k)
+					skip(); c = substr(buf, pos, 1); pos++
+					if (c != ",") return
+				}
+				return
+			}
+			if (c == "[") {
+				pos++; skip()
+				if (substr(buf, pos, 1) == "]") { pos++; return }
+				for (i = 0; pos <= n; i++) {
+					val(path "/" i)
+					skip(); c = substr(buf, pos, 1); pos++
+					if (c != ",") return
+				}
+				return
+			}
+			if (c == "\"") { printf "%s\t%s\n", path, str(); return }
+			start = pos
+			while (pos <= n && index(",}] \t\r\n", substr(buf, pos, 1)) == 0) pos++
+			printf "%s\t%s\n", path, substr(buf, start, pos - start)
+		}' "$@"
+}
+
+# The token at path $1 in flattened input, or "null".
+pick() {
+	awk -F '\t' -v p="$1" '$1 == p { v = substr($0, length($1) + 2) } END { print (v == "" ? "null" : v) }'
+}
+
+sha256_16() {
+	if command -v shasum >/dev/null 2>&1; then
+		printf '%s' "$1" | shasum -a 256 | cut -c1-16
+	elif command -v sha256sum >/dev/null 2>&1; then
+		printf '%s' "$1" | sha256sum | cut -c1-16
+	else
+		die "needs shasum or sha256sum to make item ids"
+	fi
+}
+
+is_url() {
+	case $1 in http://?* | https://?*) return 0 ;; *) return 1 ;; esac
+}
+
+# Absolute path with symlinked folders resolved. The last component may be missing
+# (for rl done/rm on a file that is gone), but its folder must exist.
+abspath() {
+	if [ -d "$1" ]; then
+		(CDPATH='' cd -- "$1" 2>/dev/null && pwd -P)
+	else
+		_d=$(dirname -- "$1")
+		_b=$(basename -- "$1")
+		_r=$(CDPATH='' cd -- "$_d" 2>/dev/null && pwd -P) || return 1
+		[ "$_r" = / ] && _r=''
+		printf '%s/%s\n' "$_r" "$_b"
+	fi
+}
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+epoch_iso() {
+	date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
+mtime_epoch() {
+	# GNU first: BSD stat rejects -c without output, while GNU stat -f prints file-system data.
+	stat -c %Y -- "$1" 2>/dev/null || stat -f %m -- "$1" 2>/dev/null
+}
+
+# The id for an argument: an id already on the list, else the id of the URL or path.
+resolve_id() {
+	case $1 in
+	[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+		if [ -f "$ITEMS/$1.json" ]; then
+			printf '%s\n' "$1"
+			return 0
+		fi
+		;;
+	esac
+	if is_url "$1"; then
+		sha256_16 "$1"
+	else
+		_p=$(abspath "$1") || die "no such file or folder: $1"
+		sha256_16 "$_p"
+	fi
+}
+
+# Writes items/<id>.json atomically from the I_* variables (each a JSON token).
+write_item() {
+	mkdir -p -- "$ITEMS" || die "cannot create $ITEMS"
+	_tmp=$ITEMS/.$I_ID.$$.tmp
+	cat >"$_tmp" <<EOF || die "cannot write $_tmp"
+{
+  "v": 1,
+  "id": "$I_ID",
+  "path": $I_PATH,
+  "url": $I_URL,
+  "title": $I_TITLE,
+  "note": $I_NOTE,
+  "kind": "$I_KIND",
+  "added_at": $I_ADDED,
+  "adds": $I_ADDS,
+  "by": {
+    "terminal": $B_TERMINAL,
+    "app": $B_APP,
+    "name": $B_NAME,
+    "space": $B_SPACE,
+    "tab": $B_TAB,
+    "cwd": $B_CWD,
+    "from": $B_FROM
+  },
+  "size": $I_SIZE,
+  "mtime": $I_MTIME,
+  "done_at": $I_DONE
+}
+EOF
+	mv -f -- "$_tmp" "$ITEMS/$I_ID.json" || {
+		rm -f -- "$_tmp"
+		die "cannot write $ITEMS/$I_ID.json"
+	}
+}
+
+# Loads an item file into the I_* and B_* variables.
+load_item() {
+	_flat=$(json_flat "$1") || return 1
+	I_ID=$(printf '%s\n' "$_flat" | pick id | tr -d '"')
+	I_PATH=$(printf '%s\n' "$_flat" | pick path)
+	I_URL=$(printf '%s\n' "$_flat" | pick url)
+	I_TITLE=$(printf '%s\n' "$_flat" | pick title)
+	I_NOTE=$(printf '%s\n' "$_flat" | pick note)
+	I_KIND=$(printf '%s\n' "$_flat" | pick kind | tr -d '"')
+	I_ADDED=$(printf '%s\n' "$_flat" | pick added_at)
+	I_ADDS=$(printf '%s\n' "$_flat" | pick adds)
+	I_SIZE=$(printf '%s\n' "$_flat" | pick size)
+	I_MTIME=$(printf '%s\n' "$_flat" | pick mtime)
+	I_DONE=$(printf '%s\n' "$_flat" | pick done_at)
+	for _k in terminal app name space tab cwd from; do
+		_v=$(printf '%s\n' "$_flat" | pick "by/$_k")
+		case $_k in
+		terminal) B_TERMINAL=$_v ;; app) B_APP=$_v ;; name) B_NAME=$_v ;;
+		space) B_SPACE=$_v ;; tab) B_TAB=$_v ;; cwd) B_CWD=$_v ;; from) B_FROM=$_v ;;
+		esac
+	done
+	case $I_KIND in review | fyi | result) ;; *) I_KIND=review ;; esac
+	case $I_ADDS in '' | *[!0-9]*) I_ADDS=1 ;; esac
+}
+
+# Who is adding: the hc terminal this runs in (docs/design.md 3.3), else --from or
+# "$USER@<parent program>".
+attribution() {
+	B_TERMINAL=null B_APP=null B_NAME=null B_SPACE=null B_TAB=null B_CWD=null
+	if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
+		_tmpdir=$(mktemp -d 2>/dev/null) || _tmpdir=''
+		if [ -n "$_tmpdir" ] && hc get "$HC_TERMINAL_ID" --json >"$_tmpdir/t.json" 2>/dev/null; then
+			_flat=$(json_flat "$_tmpdir/t.json")
+			B_TERMINAL=$(printf '%s\n' "$_flat" | pick address)
+			B_APP=$(printf '%s\n' "$_flat" | pick status/app)
+			B_NAME=$(printf '%s\n' "$_flat" | pick name)
+			B_SPACE=$(printf '%s\n' "$_flat" | pick labels/herdr.space)
+			B_TAB=$(printf '%s\n' "$_flat" | pick labels/herdr.tab)
+			B_CWD=$(printf '%s\n' "$_flat" | pick cwd)
+		fi
+		[ -n "$_tmpdir" ] && rm -f -- "$_tmpdir/t.json" && rmdir -- "$_tmpdir"
+	fi
+	if [ -n "$OPT_FROM" ]; then
+		B_FROM=$(json_str "$OPT_FROM")
+	elif [ "$B_TERMINAL" = null ]; then
+		_parent=$(ps -o comm= -p "$PPID" 2>/dev/null | sed 's/^-//; s|.*/||')
+		B_FROM=$(json_str "${USER:-$(id -un)}@${_parent:-unknown}")
+	else
+		B_FROM=null
+	fi
+}
+
+cmd_add() {
+	OPT_NOTE='' OPT_TITLE='' OPT_FROM='' OPT_KIND=review target=''
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--note) [ $# -ge 2 ] || die "--note needs a value"; OPT_NOTE=$2; shift 2 ;;
+		--note=*) OPT_NOTE=${1#--note=}; shift ;;
+		--title) [ $# -ge 2 ] || die "--title needs a value"; OPT_TITLE=$2; shift 2 ;;
+		--title=*) OPT_TITLE=${1#--title=}; shift ;;
+		--from) [ $# -ge 2 ] || die "--from needs a value"; OPT_FROM=$2; shift 2 ;;
+		--from=*) OPT_FROM=${1#--from=}; shift ;;
+		--kind) [ $# -ge 2 ] || die "--kind needs a value"; OPT_KIND=$2; shift 2 ;;
+		--kind=*) OPT_KIND=${1#--kind=}; shift ;;
+		--) shift; [ $# -ge 1 ] && { target=$1; shift; }; break ;;
+		-*) die "unknown option for add: $1" ;;
+		*) [ -z "$target" ] || die "add takes one path or URL"; target=$1; shift ;;
+		esac
+	done
+	[ $# -eq 0 ] || die "add takes one path or URL"
+	[ -n "$target" ] || die "add needs a path or URL"
+	case $OPT_KIND in review | fyi | result) ;; *) die "--kind must be review, fyi or result" ;; esac
+
+	I_SIZE=null I_MTIME=null
+	if is_url "$target"; then
+		I_ID=$(sha256_16 "$target")
+		I_PATH=null
+		I_URL=$(json_str "$target")
+		default_title=${target#*://}
+	else
+		[ -e "$target" ] || die "no such file or folder: $target"
+		real=$(abspath "$target") || die "cannot resolve $target"
+		I_ID=$(sha256_16 "$real")
+		I_PATH=$(json_str "$real")
+		I_URL=null
+		default_title=$(basename -- "$real")
+		if [ -f "$real" ]; then
+			case $real in
+			*.md | *.markdown | *.MD)
+				heading=$(head -n 400 <"$real" 2>/dev/null | tr -d '\r' | sed -n '/^# /{ s/^# *//; s/ *#* *$//; p; q; }')
+				[ -n "$heading" ] && default_title=$heading
+				;;
+			esac
+			I_SIZE=$(wc -c <"$real" | tr -d ' ')
+		fi
+		m=$(mtime_epoch "$real") && m=$(epoch_iso "$m") && I_MTIME="\"$m\""
+	fi
+
+	I_ADDS=1
+	if [ -f "$ITEMS/$I_ID.json" ]; then
+		old=$(json_flat "$ITEMS/$I_ID.json" | pick adds)
+		case $old in '' | *[!0-9]*) ;; *) I_ADDS=$((old + 1)) ;; esac
+	fi
+	I_TITLE=$(json_str "${OPT_TITLE:-$default_title}")
+	if [ -n "$OPT_NOTE" ]; then I_NOTE=$(json_str "$OPT_NOTE"); else I_NOTE=null; fi
+	I_KIND=$OPT_KIND
+	I_ADDED="\"$(now_iso)\""
+	I_DONE=null
+	attribution
+	write_item
+	printf '%s\n' "$I_ID"
+}
+
+cmd_done() {
+	[ $# -eq 1 ] || die "done takes one path, URL or id"
+	id=$(resolve_id "$1")
+	[ -f "$ITEMS/$id.json" ] || die "not on the list: $1"
+	load_item "$ITEMS/$id.json" || die "cannot read $ITEMS/$id.json"
+	I_ID=$id
+	I_DONE="\"$(now_iso)\""
+	write_item
+	printf '%s\n' "$id"
+}
+
+cmd_rm() {
+	[ $# -eq 1 ] || die "rm takes one path, URL or id"
+	id=$(resolve_id "$1")
+	[ -f "$ITEMS/$id.json" ] || die "not on the list: $1"
+	rm -f -- "$ITEMS/$id.json" || die "cannot remove $ITEMS/$id.json"
+	printf '%s\n' "$id"
+}
+
+# Read and done state, as the mod defines it (docs/design.md 4.3): an item is read
+# when the person read it at or after it was (re)added, and done when the latest
+# done mark (rl done, or the person in the pane) is at or after both the (re)add
+# and the person's last "not done". Times compare by their first 19 characters
+# (seconds), which every writer produces.
+cmd_ls() {
+	filter=open json=0
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--unread) filter=unread ;;
+		--done) filter="done" ;;
+		--all) filter=all ;;
+		--json) json=1 ;;
+		*) die "unknown option for ls: $1" ;;
+		esac
+		shift
+	done
+	set --
+	for f in "$ITEMS"/*.json; do [ -f "$f" ] && set -- "$@" "$f"; done
+	if [ $# -eq 0 ]; then
+		[ "$json" = 1 ] && printf '[]\n'
+		return 0
+	fi
+	{
+		[ -f "$STATE" ] && json_flat "$STATE"
+		json_flat "$@"
+	} | awk -F '\t' -v filter="$filter" -v json="$json" -v statefile="$STATE" '
+		function unq(t) {
+			if (t == "null" || t == "") return ""
+			t = substr(t, 2, length(t) - 2)
+			gsub(/\\"/, "\"", t); gsub(/\\n|\\r|\\t/, " ", t); gsub(/\\\\/, "\\", t)
+			return t
+		}
+		function ts(t) { t = unq(t); return substr(t, 1, 19) }
+		function later(a, b) { return a > b ? a : b }
+		function finish(   id, added, rd, done, undone, isread, isdone, show) {
+			if (file == "") return
+			id = unq(f["id"]); added = ts(f["added_at"])
+			rd = ts(st["items/" id "/read_at"])
+			done = later(ts(f["done_at"]), ts(st["items/" id "/done_at"]))
+			undone = ts(st["items/" id "/undone_at"])
+			isread = rd != "" && rd >= added
+			isdone = done != "" && done >= added && done >= undone
+			show = filter == "all" || (filter == "done" && isdone) || (filter == "open" && !isdone) || (filter == "unread" && !isdone && !isread)
+			if (show) {
+				if (json) print file
+				else printf "%s  %-6s  %-6s  %s  %s\n", id, (isdone ? "done" : isread ? "read" : "unread"), unq(f["kind"]), unq(f["title"]), (f["path"] != "null" ? unq(f["path"]) : unq(f["url"]))
+			}
+			file = ""; delete f
+		}
+		$1 == "@" && !seen_item && substr($0, 3) == statefile { instate = 1; next }
+		$1 == "@" { finish(); instate = 0; seen_item = 1; file = substr($0, 3); next }
+		{ v = substr($0, length($1) + 2); if (instate) st[$1] = v; else f[$1] = v }
+		END { finish() }
+	' | if [ "$json" = 1 ]; then
+		first=1
+		printf '['
+		while IFS= read -r f; do
+			[ "$first" = 1 ] || printf ','
+			first=0
+			printf '\n'
+			cat -- "$f"
+		done
+		printf ']\n'
+	else
+		cat
+	fi
+}
+
+[ $# -ge 1 ] || {
+	usage >&2
+	exit 2
+}
+cmd=$1
+shift
+case $cmd in
+add) cmd_add "$@" ;;
+ls | list) cmd_ls "$@" ;;
+done) cmd_done "$@" ;;
+rm | remove) cmd_rm "$@" ;;
+-h | --help | help) usage ;;
+*)
+	usage >&2
+	exit 2
+	;;
+esac

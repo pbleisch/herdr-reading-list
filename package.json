@@ -1,0 +1,8 @@
+{
+  "name": "herdr-reading-list",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/ && sh test/rl.test.sh && RL_SHELL=dash sh test/rl.test.sh"
+  }
+}
