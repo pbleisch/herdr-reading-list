@@ -19,7 +19,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, VirtualListScrollHandle, TextView, Editor, EditorState, InputState, Input } from "gpui-base";
 import { exec, hc, readTextFile, writeTextFile, watchFolder, nextCommand, agents, spaces, panes, focused, machines, theme, settings, layout, props, notify, appHome, run, shared, setShared, openOverlay, closeOverlay, window as appWindow } from "herdr";
 import { parseListing, parseStats, typeOf, openAction, itemFile, itemKey } from "./core/items.js";
-import { WIDE, TEXT_BYTES, THUMB, parseStat, previewKind, previewShown, thumbSize, cacheName, previewText, stripThreads, parseFolder, copyText } from "./core/preview.js";
+import { WIDE, TEXT_BYTES, THUMB, parseStat, previewKind, previewShown, thumbSize, cacheName, previewText, stripThreads, readableHtml, htmlText, parseFolder, copyText } from "./core/preview.js";
 import { platformOf, words, noQuickLook } from "./core/platform.js";
 import { TIMEOUT_MS, THUMB_SECONDS, TRUST_FILE, userHandler, chain, checkCall, runChain, token, outcome, parseTrust, serializeTrust, parseCheck, handlerState, handlerBanner } from "./core/handlers.js";
 import { helperCall, rlFile, rlSource } from "./core/helpers.js";
@@ -32,6 +32,7 @@ import { parseInbox, inboxPlan } from "./core/inbox.js";
 import { isClaudeAgent, foregroundPid, parseScan, sentPlan, sentOn, setSent, sentAddArgs } from "./core/sent.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "./core/viewer.js";
 import { findMatches, firstFrom, step, matchLabel, wrapRows, rowOf, segments } from "./core/search.js";
+import { SCROLL_KEYS, keyOffset, wheelOffset, centerOffset, clampOffset, maxOffset, visibleRows, thumb, trackOffset } from "./core/scroll.js";
 import { NAME } from "./core/name.js";
 import { INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
 import { POLL_MS, POLL_TIMEOUT_MS, ASK_MS, POLL_SCRIPT, BASE64_SCRIPT, parsePoll, afterPoll, syncMachines, pollPaths, unstated, mergeItems, onMachine, listedMachines, isOffline, safeName, copyPaths, parseMeta, isStale, fetchRoute, needsAsk, fetchedLabel, sizeLabel, remoteBanner } from "./core/remote.js";
@@ -57,6 +58,8 @@ const KEYS = {
 // character's width as a share of the size (a little over most code fonts' 0.6), which sets
 // how many characters a row holds.
 const SEARCH_FONT = 12, SEARCH_LINE = 18, MONO_WIDTH = 0.62;
+// The space above the first row and below the last when the viewer draws text as rows.
+const ROWS_PAD = 6;
 // The preview's height when it shows below the list (a narrow pane, after `p`): half the
 // pane, at most BELOW.
 const BELOW = 260;
@@ -77,6 +80,11 @@ const DOUBLE_MS = 500;
 const MENU_TITLE = { space: "Space", agent: "Agent", type: "Type", unread: "Show", sources: "Also add", actions: "Actions" };
 const ALL = { space: "All spaces", agent: "All agents", type: "All types" };
 const MENU_ROW = 29, MENU_HEAD = 25;
+
+const rowsHeight = (rows) => rows.length * SEARCH_LINE + 2 * ROWS_PAD;
+
+// A link in a preview: the web ones open in the browser.
+const openLink = (url, cx) => { if (/^https?:\/\//i.test(url)) cx.open_url(url); };
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -1106,7 +1114,7 @@ export default class ReadingList extends View {
     };
     if (kind.how === "missing" || kind.how === "url") return { ...base, how: kind.how };
     if (kind.how === "folder") return { ...base, how: "folder", folder: parseFolder(await run("listdir", [item.path], on)) };
-    if (kind.how === "markdown" || kind.how === "text") {
+    if (kind.how === "markdown" || kind.how === "html" || kind.how === "text") {
       let raw;
       if (on && st.size <= 1024 * 1024) {
         // Rejects on text it cannot read as UTF-8: then the head, as here.
@@ -1118,6 +1126,7 @@ export default class ReadingList extends View {
       const text = previewText(raw, st.size);
       if (text === null) kind = THUMB;
       else if (kind.how === "markdown") return { ...base, how: "markdown", text: stripThreads(text) };
+      else if (kind.how === "html") return { ...base, how: "html", html: readableHtml(text), text: htmlText(text) };
       else {
         const t = theme();
         return { ...base, how: "text", text, code: EditorState.new({ language: kind.lang, readonly: true, value: text,
@@ -1452,6 +1461,7 @@ export default class ReadingList extends View {
     const pv = this.pv?.id === itemKey(item) ? this.pv : null;
     if (!pv) return message("Loading preview…");
     if (how === "full" && this.sr && this.sr.pv === pv) return this.searchBody(pv, t);
+    if (how === "full" && this.searchText(pv) !== null) return this.viewerBody(item, pv, t);
     switch (pv.how) {
       case "url":
         return v_flex().p(14).gap(8).text_size(12)
@@ -1464,7 +1474,10 @@ export default class ReadingList extends View {
           .child(div().text_size(12).text_color(t.dim).child("Nothing is at this path any more. d marks it done; Shift-D takes it off the list."));
       case "markdown":
         return div().flex_1().min_h(0).px(14).py(8).child(TextView.markdown(`rl-md-${itemKey(item)}`, pv.text).scrollable(true).selectable(true).size_full()
-          .on_link_click((url, cx) => { if (/^https?:\/\//i.test(url)) cx.open_url(url); }));
+          .on_link_click(openLink));
+      case "html":
+        return div().flex_1().min_h(0).px(14).py(8).child(TextView.html(`rl-html-${itemKey(item)}`, pv.html).scrollable(true).selectable(true).size_full()
+          .on_link_click(openLink));
       case "text":
         return Editor.new(pv.code).flex_1().min_h(0);
       case "image":
@@ -1529,6 +1542,7 @@ export default class ReadingList extends View {
     const item = this.viewerItem();
     if (item) this.wantPreview(item, this.width ?? 0, cx);
     this.followSearch(item);
+    this.vsShown = null;
     return this.sized(v_flex().id("readlist-viewer").track_focus(this.handle).size_full().min_h(0).bg(t.background).text_size(13))
       .on_mouse_down("left", () => { if (!this.sTyping) this.handle.focus(); })
       .on_key_down((e, cx) => {
@@ -1553,7 +1567,13 @@ export default class ReadingList extends View {
     this.sBar = null;
     this.sTyping = false;
     this.sJump = false;
-    this.sScroll = VirtualListScrollHandle.new();
+    // The viewer's scroll areas for the item it shows (core/scroll.js): key -> { offset,
+    // view, content }, the one the last frame drew (which the keys scroll), and the box's
+    // height.
+    this.vsItem = null;
+    this.vs = new Map();
+    this.vsShown = null;
+    this.vsView = 0;
     this.sInput = InputState.new({ placeholder: "Find in this item: Enter, then n / Shift-N" });
     this.sInput.on("submit", (_e, cx) => { this.runSearch(); cx.notify(); });
     this.sInput.on("focus", (_e, cx) => { this.sTyping = true; cx.notify(); });
@@ -1568,7 +1588,7 @@ export default class ReadingList extends View {
 
   // The text a preview draws, to search; null when it draws none (an image, a folder, ...).
   searchText(pv) {
-    return pv && (pv.how === "markdown" || pv.how === "text") && typeof pv.text === "string" ? pv.text : null;
+    return pv && (pv.how === "markdown" || pv.how === "html" || pv.how === "text") && typeof pv.text === "string" ? pv.text : null;
   }
 
   // A key in the viewer: true when handled. While the prompt has the keyboard, Esc closes the
@@ -1589,6 +1609,10 @@ export default class ReadingList extends View {
     }
     if (k === "escape" && this.sBar) {
       this.closeSearch();
+      return true;
+    }
+    if (SCROLL_KEYS[k] && this.vsShown) {
+      this.scrollTo(this.vsShown, keyOffset(k, this.vsShown));
       return true;
     }
     return this.act(KEYS[k], cx);
@@ -1642,8 +1666,13 @@ export default class ReadingList extends View {
     this.sJump = true;
   }
 
-  // Esc: the bar goes and the preview draws as before.
+  // Esc: the bar goes and the preview draws as before, scrolled to about where the search was
+  // (text and code draw the same rows either way, so they stay exactly there).
   closeSearch() {
+    const id = this.sr?.id;
+    const from = id && this.vs.get(`${id}|search`);
+    const to = from && (this.vs.get(`${id}|markdown`) ?? this.vs.get(`${id}|html`));
+    if (to && maxOffset(from) > 0) to.offset = clampOffset((from.offset / maxOffset(from)) * maxOffset(to), to);
     this.sr = null;
     this.sBar = null;
     this.sInput.set_value("");
@@ -1693,34 +1722,116 @@ export default class ReadingList extends View {
         .child(svg(`${ICONS}/x.svg`).size(12)));
   }
 
-  // The shown item's text while a search is on: drawn here, row by row in the code font, so
-  // every match can be marked and the current one scrolled to (markdown shows as its source).
+  // The shown item's text while a search is on: drawn as rows in the code font, so every
+  // match can be marked and the current one scrolled to (markdown shows as its source, HTML
+  // as its text). Text and code are drawn as these rows anyway, and keep their place.
   searchBody(pv, t) {
     const sr = this.sr;
-    const text = pv.text;
-    const cols = Math.floor(((this.width ?? 400) - 28 - 14) / (SEARCH_FONT * MONO_WIDTH));
-    if (this.sRows?.text !== text || this.sRows.cols !== cols) this.sRows = { text, cols, rows: wrapRows(text, cols) };
-    const rows = this.sRows.rows;
-    if (this.sJump && sr.index >= 0) {
-      this.sScroll.scroll_to_item(rowOf(rows, sr.matches[sr.index].start), "center");
+    const rows = this.textRows(pv.text);
+    const key = `${sr.id}|${pv.how === "text" ? "text" : "search"}`;
+    const s = this.scrollState(sr.id, key);
+    s.content = rowsHeight(rows);
+    // Waits for the first frame's height, so the match lands in the middle.
+    if (this.sJump && s.view > 0) {
+      if (sr.index >= 0) {
+        const top = ROWS_PAD + rowOf(rows, sr.matches[sr.index].start) * SEARCH_LINE;
+        s.offset = centerOffset(top, top + SEARCH_LINE, s);
+      }
       this.sJump = false;
     }
+    return this.rowsBody(sr.id, key, pv.text, rows, sr.matches, sr.index, t);
+  }
+
+  // ---- scrolling in the viewer (core/scroll.js) ----
+
+  // The viewer's text when no search is on: markdown and HTML rich, laid out at full height
+  // and moved up by the offset; text and code as rows (Editor cannot be scrolled from code).
+  viewerBody(item, pv, t) {
+    const k = itemKey(item);
+    if (pv.how === "text") return this.rowsBody(k, `${k}|text`, pv.text, this.textRows(pv.text), [], -1, t);
+    const view = pv.how === "html" ? TextView.html(`rl-html-${k}`, pv.html) : TextView.markdown(`rl-md-${k}`, pv.text);
+    return this.scroller(k, `${k}|${pv.how}`, t, (s, zoom) => div().id(`rl-scroll-text-${this.vsGen}-${pv.how}`).absolute().left(0).right(0).top(-s.offset).px(14).py(8)
+      .on_size_change((size, cx) => this.measured(s, "content", size.height / zoom, cx))
+      .child(view.selectable(true).w_full().on_link_click(openLink)));
+  }
+
+  // The scroll area `key` of item `id`: { offset, view, content }. Another item starts them
+  // all at the top; the box's height carries over, so a search can center its first match.
+  scrollState(id, key) {
+    if (this.vsItem !== id) {
+      this.vsItem = id;
+      this.vs = new Map();
+      // on_size_change reports a size only when it changes for an element id: a fresh id
+      // for the text box, so a new item's height is always reported.
+      this.vsGen = (this.vsGen ?? 0) + 1;
+    }
+    if (!this.vs.has(key)) this.vs.set(key, { offset: 0, view: 0, content: 0 });
+    const s = this.vs.get(key);
+    s.view = this.vsView;
+    return s;
+  }
+
+  // A height on_size_change reported: the box's ("view", the same for every area) or the
+  // text's ("content").
+  measured(s, what, px, cx) {
+    if (!(px >= 0) || Math.abs((s[what] ?? 0) - px) < 0.5) return;
+    s[what] = px;
+    if (what === "view") this.vsView = px;
+    s.offset = clampOffset(s.offset, s);
+    cx.notify();
+  }
+
+  scrollTo(s, offset, cx = null) {
+    if (offset === null || Math.abs(offset - s.offset) < 0.01) return;
+    s.offset = offset;
+    cx?.notify();
+  }
+
+  // A clipped box that shows `body(state, zoom)` scrolled by the state's offset: the wheel
+  // and the trackpad move it, and a thumb on the right shows where it is (a click on the
+  // track pages toward the click).
+  scroller(id, key, t, body) {
+    const s = this.scrollState(id, key);
+    s.offset = clampOffset(s.offset, s);
+    this.vsShown = s;
+    const zoom = settings().zoom ?? 1;
+    const bar = thumb(s);
+    return div().id("rl-scroll").relative().flex_1().min_h(0).overflow_hidden()
+      .on_size_change((size, cx) => this.measured(s, "view", size.height / zoom, cx))
+      .on_scroll_wheel((e, cx) => this.scrollTo(s, wheelOffset((e.delta?.y ?? 0) / zoom, s), cx))
+      .child(body(s, zoom))
+      .when(Boolean(bar), (el) => el.child(div().id("rl-scroll-track").absolute().top(0).bottom(0).right(0).w(12)
+        .on_mouse_down("left", (e, cx) => {
+          if (e.local_position) this.scrollTo(s, trackOffset(e.local_position.y / zoom, s), cx);
+        })
+        .child(div().absolute().right(3).top(bar.top).w(6).h(bar.height).rounded(3).bg(t.muted + "66"))));
+  }
+
+  // The text as rows a row of the pane wide (core/search.js wrapRows), kept while the text
+  // and the width stay.
+  textRows(text) {
+    const cols = Math.floor(((this.width ?? 400) - 28 - 14) / (SEARCH_FONT * MONO_WIDTH));
+    if (this.sRows?.text !== text || this.sRows.cols !== cols) this.sRows = { text, cols, rows: wrapRows(text, cols) };
+    return this.sRows.rows;
+  }
+
+  // Rows of `text` in the code font, only the ones on screen drawn, with `matches` marked and
+  // the `current` one stronger.
+  rowsBody(id, key, text, rows, matches, current, t) {
     const font = settings().font_family;
     const row = (r) => h_flex().h(SEARCH_LINE).flex_none().overflow_hidden().whitespace_nowrap()
       .when(typeof font === "string" && font.length > 0, (el) => el.font_family(String(font)))
       .text_size(SEARCH_FONT).text_color(t.foreground)
-      .children(segments(text, r, sr.matches, sr.index).map((s) => div().flex_none()
+      .children(segments(text, r, matches, current).map((s) => div().flex_none()
         .when(s.mark === "match", (el) => el.bg(t.selection).rounded(2))
         .when(s.mark === "current", (el) => el.bg(t.accent).text_color(t.accent_foreground).rounded(2))
         .child(s.text)));
-    return div().id("rl-search").relative().flex_1().min_h(0)
-      .child(v_virtual_list("rl-search-rows", rows.length, SEARCH_LINE, (index) => String(index),
-        (range) => rows.slice(range.start, range.end).map(row))
-        .track_scroll(this.sScroll)
-        .size_full()
-        .px(14)
-        .py(6))
-      .child(Scrollbar.vertical("rl-search-rows").absolute().inset_0());
+    this.scrollState(id, key).content = rowsHeight(rows);
+    return this.scroller(id, key, t, (s) => {
+      const shown = visibleRows(s, SEARCH_LINE, rows.length, ROWS_PAD);
+      return div().absolute().inset_0().children(rows.slice(shown.start, shown.end).map((r, i) =>
+        row(r).absolute().left(14).right(14).top(ROWS_PAD + (shown.start + i) * SEARCH_LINE - s.offset)));
+    });
   }
 
   render(cx) {

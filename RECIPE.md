@@ -3,8 +3,8 @@
 A list of files and links that agents and tools put up for the person to read. An agent runs
 `rl add plan.md --note "why"`; the item appears at the top of the list with a toast, showing what
 it is, the note and who added it. The person walks the list with the keyboard, sees a preview of
-the selected item beside the list (rendered markdown, highlighted code, images, and on macOS Quick
-Look thumbnails of HTML and PDF), opens it in its default app with Enter, and marks it done. Agents on
+the selected item beside the list (rendered markdown and HTML, highlighted code, images, and on
+macOS Quick Look thumbnails of PDF), opens it in its default app with Enter, and marks it done. Agents on
 other machines Herdr reaches add to that machine's own list, which shows here too: their files
 are previewed in place or fetched into a local copy to open. When the person turns it on, files
 Claude Code agents send them with their SendUserFile tool arrive on the list too, without the agent
@@ -58,9 +58,10 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   width, 300 to 460), separated by a 1px `border`, on `background`. A header (14 side padding, 1px `border` under it) with the title (medium), the
   path or URL (11 `dim`; `devbox:/path` for another machine's, with "on devbox" or "copy from devbox,
   fetched 18:42; edits to the copy stay on this Mac" (Linux: "this computer") under it) and the note (11.5 `muted`), then
-  the body: markdown rendered (`TextView.markdown`),
-  text and code in a read-only editor with highlighting, images, a Quick Look thumbnail for HTML,
-  PDF and anything else Quick Look draws (on Linux, where there are no thumbnails: the type's icon,
+  the body: markdown rendered (`TextView.markdown`), HTML rendered (`TextView.html`, scrollable;
+  the `<body>` without comments, `<head>`, scripts, styles, inline SVG and the like, since it draws
+  no CSS), text and code in a read-only editor with highlighting, images, a Quick Look thumbnail
+  for PDF and anything else Quick Look draws (on Linux, where there are no thumbnails: the type's icon,
   48 `muted`, centered, over "No thumbnail for this type here. Enter opens it; Space shows it in
   GNOME Sushi." in 12 `dim`), a folder's entries, a link's URL, "gone" for a missing
   file. Narrower, the preview is hidden until `p`, then shows below the list (half the pane, at
@@ -98,12 +99,22 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   this machine and every other one again now. Each is also a command,
   `readlist.<down|up|top|bottom|open|preview|pane|reveal|copy|read|done|undo|delete|view|find|filter|viewer|focus|install-rl|refresh|claude-files|handler>`,
   which only the copy that had the keyboard last acts on (else the sidebar's).
+- **Scrolling in the viewer** (`core/scroll.js`): `TextView` and `Editor` cannot be scrolled from
+  code, so the `v` pane lays the text out at full height in a clipped box and moves it up by an
+  offset it keeps: markdown and HTML rich (not scrollable themselves), text and code as the rows
+  search draws (below, unhighlighted), only the rows on screen built. The wheel and the trackpad
+  move it (`on_scroll_wheel`), and while the pane has the keyboard `j`/`k` and Down/Up a line
+  (40), Space/Shift-Space and Page Down/Page Up a page less a line, Ctrl-D/Ctrl-U half a page,
+  `g`/Home and Shift-G/End the ends. A 6-wide thumb (`muted` at 40%, rounded 3, 3 from the right,
+  at least 24 high) shows where it is when the text is longer than the box; a click on its track
+  pages toward the click. Another item starts at the top; Esc on a search puts markdown and HTML
+  at the same share of the way down as the search was.
 - **Search in the viewer** (while the `v` pane has the keyboard; a click on it gives it the
   keyboard): `/` opens a search bar under the pane's header (26 high, a search icon, the prompt
   "Find in this item: Enter, then n / Shift-N", an x). Enter goes to the first match after the
   current one (from the top when there is none; an empty prompt repeats the search) and the body
   turns into the item's text drawn row by row in the code font (12, 18-high rows, long lines
-  wrapped; markdown as its source) with every match on `selection` and the current one on `accent`
+  wrapped; markdown as its source, HTML as its text) with every match on `selection` and the current one on `accent`
   in `accent_foreground`, scrolled to the middle; the bar says "3 of 12" (11 `dim`), "no matches"
   (`blocked`) or "3 of 12 · wrapped". `n`/Shift-N go to the next/previous match, wrapping; Esc closes
   the search and the preview draws as before. Literal text, case-insensitive unless the query has
@@ -207,7 +218,7 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   menu). `core/*.js` are pure functions and shell scripts, node-tested: `items.js` (parse, types,
   open action), `state.js` (read/done state), `filters.js`, `arrival.js` (toast claims),
   `inbox.js`, `preview.js`, `viewer.js`, `search.js` (search in the viewer: matches, smart case,
-  next/previous, rows), `install.js`, `remote.js` (the poll, each machine's
+  next/previous, rows), `scroll.js` (scrolling in the viewer: keys, wheel, thumb), `install.js`, `remote.js` (the poll, each machine's
   online/offline state, local copies), `sent.js` (files Claude Code agents sent: the transcript
   scan, the record of what was added). `icons/` are Lucide SVGs (ISC).
 - `mods/readlist/bin/rl`: the producer, POSIX `sh` and `awk`. Writes `items/<id>.json` atomically
@@ -240,7 +251,7 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   `settings`, `layout`, `props`, `notify` (with an `action`), `appHome`, `run` (`pane.split`,
   `pane.close`, `pane.focus`), `shared`/`setShared` (`readlist.toasted`, `.quiet`, `.unread`,
   `.selected`, `.viewer`, `.pick`, `.keyboard`), `openOverlay`/`closeOverlay`, `localStorage`.
-  `gpui-base`: `v_virtual_list`, `Scrollbar`, `TextView.markdown`, `EditorState`/`Editor`,
+  `gpui-base`: `v_virtual_list`, `Scrollbar`, `TextView.markdown`/`TextView.html`, `EditorState`/`Editor`,
   `InputState`/`Input`.
 - `keys.json`: `"global": {"cmd-shift-i": "mod.open:readlist", "ctrl-shift-i": "mod.open:readlist"}`.
   Merge only your platform's: `cmd-shift-i` on macOS, `ctrl-shift-i` on Linux and Windows (free in

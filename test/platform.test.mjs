@@ -40,7 +40,7 @@ test("openAction reveals Linux launchers on Linux only", () => {
 });
 
 test("previewKind asks the handlers for a thumbnail on every platform", () => {
-  for (const p of ["/a/x.pdf", "/a/index.html", "/a/x.heic", "/a/x.key"]) assert.deepEqual(previewKind(item({ path: p }), "f"), { how: "thumb" }, p);
+  for (const p of ["/a/x.pdf", "/a/x.heic", "/a/x.key"]) assert.deepEqual(previewKind(item({ path: p }), "f"), { how: "thumb" }, p);
   assert.deepEqual(previewKind(item({ path: "/a/x.png" }), "f"), { how: "image", ext: "png" });
   assert.deepEqual(previewKind(item(), "f"), { how: "markdown" });
   assert.deepEqual(THUMB, { how: "thumb" });

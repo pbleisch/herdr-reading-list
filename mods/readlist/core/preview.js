@@ -33,9 +33,10 @@ export function previewShown(width, choice) {
 }
 
 // What the preview draws for an item, given its STAT line (`kind mtime size`, or `-`):
-// { how: "url" | "missing" | "markdown" | "text" | "image" | "thumb" | "folder", lang?, ext? }.
-// "thumb" asks the handlers for a thumbnail (core/handlers.js); when none makes one, the
-// preview shows the type's icon.
+// { how: "url" | "missing" | "markdown" | "html" | "text" | "image" | "thumb" | "folder", lang?, ext? }.
+// HTML draws as text (readableHtml), so a long page scrolls like markdown does. "thumb"
+// asks the handlers for a thumbnail (core/handlers.js); when none makes one, the preview
+// shows the type's icon.
 export function previewKind(item, fsKind) {
   if (item.url) return { how: "url" };
   if (!fsKind || fsKind === "-") return { how: "missing" };
@@ -43,6 +44,7 @@ export function previewKind(item, fsKind) {
   const e = ext(item.path);
   const type = typeOf(item, fsKind);
   if (type === "md") return { how: "markdown" };
+  if (type === "html") return { how: "html" };
   if (type === "code" || type === "text") return { how: "text", lang: LANG[e] ?? (e || "text") };
   if (type === "image" && DRAWN.has(e)) return { how: "image", ext: e };
   return THUMB;
@@ -141,6 +143,49 @@ export function stripThreads(md) {
   return (md ?? "")
     .replace(/\n*<!-- omd-threads\n[\s\S]*?\n-->\s*$/, "\n")
     .replace(/<!--\s*omd-(?:start|end):[A-Za-z0-9_-]+\s*-->/g, "");
+}
+
+// HTML for TextView.html, which draws the text and its structure but no CSS or scripts: the
+// <body>'s content with comments and the elements that hold no text to read (scripts,
+// styles, inline SVG, ...) left out, so their source does not show as text.
+const NOT_TEXT = ["head", "script", "style", "noscript", "template", "svg", "math", "iframe", "object", "canvas", "select"];
+export function readableHtml(html) {
+  let s = (html ?? "").replace(/<!--[\s\S]*?(?:-->|$)/g, "");
+  for (const tag of NOT_TEXT) {
+    s = s.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?(?:<\\/${tag}\\s*>|$)`, "gi"), "");
+  }
+  const body = /<body\b[^>]*>([\s\S]*?)(?:<\/body\s*>|$)/i.exec(s);
+  return (body ? body[1] : s.replace(/<!doctype[^>]*>|<\/?html\b[^>]*>/gi, "")).trim();
+}
+
+const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ndash: "–", mdash: "\u2014", hellip: "…",
+  lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", bull: "•", middot: "·", copy: "©", reg: "®", trade: "™",
+  times: "×", rarr: "→", larr: "←", uarr: "↑", darr: "↓", deg: "°", euro: "€", pound: "£" };
+const BLOCK = "address|article|aside|blockquote|dd|details|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|summary|table|tbody|thead|tfoot|tr|ul";
+
+// The text of HTML, as a person reads it: what search in the viewer looks through and
+// shows. Blocks and <br> start lines, table cells are spaced apart, entities decoded,
+// runs of spaces made one and blank lines at most one.
+export function htmlText(html) {
+  const decode = (s) => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+\d*);/gi, (m, e) => {
+    if (e[0] === "#") {
+      const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+      return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m;
+    }
+    return ENTITIES[e.toLowerCase()] ?? m;
+  });
+  const text = readableHtml(html)
+    .replace(/<br\b[^>]*>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "\n• ")
+    .replace(new RegExp(`</?(?:${BLOCK})\\b[^>]*>`, "gi"), "\n")
+    .replace(/<\/t[dh]\s*>/gi, "  ")
+    .replace(/<[^>]*>/g, "");
+  return decode(text)
+    .split("\n")
+    .map((l) => l.replace(/[ \t ]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 // A folder listing from LIST_DIR_SCRIPT's output: { entries: [{name, dir}], more }.

@@ -11,7 +11,7 @@ default app when you press Enter.
 
 | | Open (Enter) | Show in the file manager (`o`) | Space: preview window | Thumbnails in the pane | Popup key |
 |---|---|---|---|---|---|
-| macOS | `open` | Finder (`open -R`) | Quick Look | Quick Look (HTML, PDF, ...) | `cmd-shift-i` |
+| macOS | `open` | Finder (`open -R`) | Quick Look | Quick Look (PDF, ...) | `cmd-shift-i` |
 | Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | GNOME Sushi, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
 | Windows | the default app | Explorer (`explorer /select,`) | the QuickLook app or PowerToys Peek, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
 
@@ -163,26 +163,34 @@ In the list:
 | `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch and Actions (built-in or your handler) |
 | Shift-R | list this machine and every other one again now |
 
-In the `v` pane (click it to give it the keyboard), you can search the item it shows, like `less`:
+In the `v` pane (click it to give it the keyboard), you can scroll and search the item it shows,
+like `less`:
 
 | Key | Does |
 |---|---|
+| `j` / `k`, Down / Up | scroll a line |
+| Space / Shift-Space, Page Down / Page Up | scroll a page |
+| Ctrl-D / Ctrl-U | scroll half a page |
+| `g` / Shift-G, Home / End | go to the top / the bottom |
 | `/` | a search prompt; Enter goes to the first match after the current one and marks them all, with "3 of 12" in the bar (Enter on an empty prompt repeats the search) |
 | `n` / Shift-N | next / previous match, wrapping at the ends ("wrapped" in the bar) |
 | Esc | close the search |
 | `v` | close the pane |
 
-The search is literal text, case-insensitive unless the query has a capital letter. It covers
-markdown, text and code; while it is on, the item shows as plain text (markdown as its source),
-and it ends when the selection moves to another item. Images, thumbnails and folders have nothing
+The wheel and the trackpad scroll it too. The search is literal text, case-insensitive unless the
+query has a capital letter. It covers markdown, HTML, text and code; while it is on, the item shows
+as plain text (markdown as its source, HTML as its text), and it ends when the selection moves to
+another item. In the `v` pane, text and code show as plain text rows (no highlighting), so they can
+be scrolled from the keys. Images, thumbnails and folders have nothing
 to search, and `/` says so.
 
 Each key in the list is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can
 bind in `keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the popup.
 
-In a pane 520 px or wider, the selected item's preview shows beside the list: markdown rendered,
-text and code highlighted, images, a folder's entries, and on macOS a Quick Look thumbnail of HTML,
-PDF and anything else Quick Look can draw (on Linux those show their type's icon). Narrower, `p`
+In a pane 520 px or wider, the selected item's preview shows beside the list: markdown and HTML
+rendered (HTML's text and structure, without its CSS or scripts), text and code highlighted, images,
+a folder's entries, and on macOS a Quick Look thumbnail of PDF and anything else Quick Look can draw
+(on Linux those show their type's icon). Narrower, `p`
 shows it below the list. A read item whose file changed since shows a "changed" chip. Executable
 items (apps, scripts, and on Linux `.desktop` files, AppImages and packages; on Windows `.exe`,
 `.bat`, `.cmd`, `.ps1`, `.msi`, `.lnk`, `.vbs`, `.js`, `.hta`, disk images and the like, and any

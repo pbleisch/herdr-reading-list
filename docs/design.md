@@ -18,8 +18,8 @@ Goals:
 Non-goals:
 
 - Commenting, annotations or editing (the review mod's job).
-- A full HTML renderer in this mod (Quick Look thumbnail in the pane; the review mod or the browser for
-  full fidelity).
+- A full HTML renderer in this mod (`TextView.html`, text without CSS, in the pane; the review mod or
+  the browser for full fidelity).
 - Syncing read state between people or machines; the list is one person's.
 - Replacing Herdr's own "agent finished" toasts.
 - Changing shipped layouts or mods (no badge in the tab bar or status bar; see 4.4).
@@ -292,9 +292,26 @@ Increment 1 has `j`/`k` and arrows, `g`/`G` and Home/End, Enter, Space (the Quic
 | `f` | the filter menu: space, agent, type, unread only |
 | `v` | open or close the viewer pane on the right (4.1) |
 
-In the viewer pane (while it has the keyboard; a click gives it the keyboard) the keys search the
-item it shows, like `less` (`core/search.js`). The list's keys, its `/` filter included, are
-unchanged; the viewer used none of these before (it acts only on `v`), so nothing is shadowed.
+In the viewer pane (while it has the keyboard; a click gives it the keyboard) the keys scroll and
+search the item it shows, like `less` (`core/scroll.js`, `core/search.js`). The list's keys, its
+`/` filter included, are unchanged; the viewer used none of these before (it acts only on `v`), so
+nothing is shadowed.
+
+| Key | Action |
+|---|---|
+| `j` / `k`, Down / Up | scroll a line (40 px) |
+| Space / Shift-Space, Page Down / Page Up | scroll a page, less a line |
+| Ctrl-D / Ctrl-U | scroll half a page |
+| `g` / Shift-G, Home / End | the top / the bottom |
+
+- `TextView` and `Editor` scroll only under the wheel, with no way to move them from code, so the
+  viewer lays the text out at full height in a clipped box and moves it up by an offset it keeps
+  itself, measured with `on_size_change`: markdown and HTML as `TextView` (not scrollable), text
+  and code as the rows search draws (below; no highlighting there, only the rows on screen built).
+  The wheel and the trackpad (`on_scroll_wheel`), the keys and search all set the offset; a thumb
+  on the right shows where it is, and a click on its track pages toward the click. Another item
+  starts at the top. The in-pane preview beside the list keeps `TextView`'s and `Editor`'s own
+  scrolling, since its keys move the selection.
 
 | Key | Action |
 |---|---|
@@ -304,12 +321,13 @@ unchanged; the viewer used none of these before (it acts only on `v`), so nothin
 
 - Literal text, not a pattern; case-insensitive unless the query has an uppercase letter (smart
   case). Matches do not overlap.
-- It searches the text the preview draws: markdown (its source, the omd threads left out), text
-  and code. `TextView` and `Editor` can neither mark text nor scroll to an offset, so while a
-  search is on the viewer draws the text itself: a virtual list of rows in the code font, long
-  lines wrapped at the columns the pane holds (a monospace character taken as 0.62 of the font
-  size), every match marked and the current one scrolled to the middle. Markdown shows as its
-  source then.
+- It searches the text the preview draws: markdown (its source, the omd threads left out), HTML
+  (its text: `htmlText`), text and code. `TextView` and `Editor` can neither mark text nor scroll
+  to an offset, so while a search is on the viewer draws the text itself: rows in the code font,
+  long lines wrapped at the columns the pane holds (a monospace character taken as 0.62 of the
+  font size), every match marked and the current one scrolled to the middle. Markdown shows as its
+  source then, HTML as its text; Esc puts them at the same share of the way down as the search
+  was.
 - A preview without text (an image, a thumbnail, a folder, a link, a missing file) says "Nothing
   to search in this preview." in the bar.
 - The search ends when the selection moves to another item. When the shown item's preview is
@@ -365,7 +383,7 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
 | Plain text, code, JSON, CSV, logs | readonly `Editor` with the extension's language (row 14), first 1 MiB (row 5) | default app |
 | Images (PNG, JPEG, GIF, SVG, WebP) | `image()` of a copy in the mod's cache (rows 15-17), scaled to the pane | Preview (default app) |
 | Other images (HEIC, TIFF, PSD) | Quick Look thumbnail (row 28) | default app |
-| HTML | Quick Look thumbnail at the pane's width, which keeps the CSS (A.3); a "Basic" toggle uses `TextView.html` (no CSS) | default browser (`open`); later, the review mod's full render (5) |
+| HTML | `TextView.html`, scrollable, of the `<body>` without comments, `<head>`, scripts, styles, inline SVG and the like (`readableHtml`): its text and structure, no CSS. A Quick Look thumbnail kept the CSS (A.3) but showed only the top of the page and could not scroll | default browser (`open`); later, the review mod's full render (5) |
 | PDF | Quick Look thumbnail of page 1 | Preview |
 | Office, Keynote, video, anything with a Quick Look generator | Quick Look thumbnail | default app |
 | Folder | its listing (`ls`), first 200 entries | Finder |
@@ -413,7 +431,7 @@ script exits 127 and says what to install, and the mod shows that in a toast).
   `gdbus`, a one-time toast says so and Space shows or hides the in-pane preview instead (in the
   narrow rail, the `v` pane).
 - Thumbnails: none (the handler passes). Images GPUI draws are copied into the cache and shown as
-  on macOS; HTML, PDF, other images and binary files show their type's icon with "Enter opens it".
+  on macOS; HTML draws as on macOS; PDF, other images and binary files show their type's icon with "Enter opens it".
 - Paths reach D-Bus as GVariant string literals with every byte that is not unreserved
   percent-encoded, so no path can end the literal.
 

@@ -32,7 +32,8 @@ test("previewKind picks how each type previews", () => {
   assert.deepEqual(previewKind(item({ path: "/a/x.log" }), "f"), { how: "text", lang: "log" });
   assert.deepEqual(previewKind(item({ path: "/a/x.PNG" }), "f"), { how: "image", ext: "png" });
   assert.deepEqual(previewKind(item({ path: "/a/x.heic" }), "f"), { how: "thumb" });
-  assert.deepEqual(previewKind(item({ path: "/a/index.html" }), "f"), { how: "thumb" });
+  assert.deepEqual(previewKind(item({ path: "/a/index.html" }), "f"), { how: "html" });
+  assert.deepEqual(previewKind(item({ path: "/a/page.HTM" }), "f"), { how: "html" });
   assert.deepEqual(previewKind(item({ path: "/a/x.pdf" }), "f"), { how: "thumb" });
   assert.deepEqual(previewKind(item({ path: "/a/x.key" }), "f"), { how: "thumb" });
   assert.deepEqual(previewKind(item({ path: "/a/run.sh" }), "x"), { how: "text", lang: "bash" });
