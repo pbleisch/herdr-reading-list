@@ -205,7 +205,8 @@ folder, with `from: "dropped"` and no toast (the person put it there; `shared("r
   the current tab's last pane to the right, or closes it if it is open. It shows the item selected
   last in any copy (`shared("readlist.selected")`), with the same renderer as the in-pane preview,
   never opens an app and never marks read. `shared("readlist.viewer")` keeps its pane id, checked
-  against `panes()`, so a viewer closed by hand is noticed.
+  against `panes()`, so a viewer closed by hand is noticed. With the keyboard, the viewer searches
+  the item it shows (`/`, `n`, Shift-N, Esc; 4.3).
 - Several copies can be alive (the sidebar block, a pane, the popup). They share `state.json`, so
   they agree; only one toasts (4.4).
 
@@ -290,6 +291,30 @@ Increment 1 has `j`/`k` and arrows, `g`/`G` and Home/End, Enter, Space (the Quic
 | `/` | filter box (title, note, path; every word must match). Enter or Down goes back to the list keeping the filter, Esc clears it |
 | `f` | the filter menu: space, agent, type, unread only |
 | `v` | open or close the viewer pane on the right (4.1) |
+
+In the viewer pane (while it has the keyboard; a click gives it the keyboard) the keys search the
+item it shows, like `less` (`core/search.js`). The list's keys, its `/` filter included, are
+unchanged; the viewer used none of these before (it acts only on `v`), so nothing is shadowed.
+
+| Key | Action |
+|---|---|
+| `/` | the search prompt. Enter goes to the first match after the current one (from the top when there is none; an empty prompt repeats the search) and marks every match; the bar says "k of n" |
+| `n` / Shift-N | next / previous match, wrapping at either end with "wrapped" in the bar |
+| Esc | close the search; the preview draws as before |
+
+- Literal text, not a pattern; case-insensitive unless the query has an uppercase letter (smart
+  case). Matches do not overlap.
+- It searches the text the preview draws: markdown (its source, the omd threads left out), text
+  and code. `TextView` and `Editor` can neither mark text nor scroll to an offset, so while a
+  search is on the viewer draws the text itself: a virtual list of rows in the code font, long
+  lines wrapped at the columns the pane holds (a monospace character taken as 0.62 of the font
+  size), every match marked and the current one scrolled to the middle. Markdown shows as its
+  source then.
+- A preview without text (an image, a thumbnail, a folder, a link, a missing file) says "Nothing
+  to search in this preview." in the bar.
+- The search ends when the selection moves to another item. When the shown item's preview is
+  made again (its file changed, or the 30 s reload), the matches are found again in the new text
+  and the current one stays at or after where it was.
 
 State lives in `state.json`, written with `writeTextFile` and compare-and-swap (rows 6-7), retried
 on a stale read:

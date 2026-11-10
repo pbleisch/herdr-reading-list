@@ -31,6 +31,7 @@ import { BURST_MS, arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFo
 import { parseInbox, inboxPlan } from "./core/inbox.js";
 import { isClaudeAgent, foregroundPid, parseScan, sentPlan, sentOn, setSent, sentAddArgs } from "./core/sent.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "./core/viewer.js";
+import { findMatches, firstFrom, step, matchLabel, wrapRows, rowOf, segments } from "./core/search.js";
 import { NAME } from "./core/name.js";
 import { INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
 import { POLL_MS, POLL_TIMEOUT_MS, ASK_MS, POLL_SCRIPT, BASE64_SCRIPT, parsePoll, afterPoll, syncMachines, pollPaths, unstated, mergeItems, onMachine, listedMachines, isOffline, safeName, copyPaths, parseMeta, isStale, fetchRoute, needsAsk, fetchedLabel, sizeLabel, remoteBanner } from "./core/remote.js";
@@ -52,6 +53,10 @@ const KEYS = {
   enter: "open", space: "preview", r: "read", d: "done", u: "undo", "shift-d": "delete", tab: "view",
   p: "pane", o: "reveal", c: "copy", "/": "find", f: "filter", v: "viewer", "shift-r": "refresh",
 };
+// Search in the viewer (core/search.js): its text size and row height, and a monospace
+// character's width as a share of the size (a little over most code fonts' 0.6), which sets
+// how many characters a row holds.
+const SEARCH_FONT = 12, SEARCH_LINE = 18, MONO_WIDTH = 0.62;
 // The preview's height when it shows below the list (a narrow pane, after `p`): half the
 // pane, at most BELOW.
 const BELOW = 260;
@@ -160,6 +165,7 @@ export default class ReadingList extends View {
     this.thumbFailed = new Map();
     this.refusedSaid = null;
     this.scroll = VirtualListScrollHandle.new();
+    if (this.role() === "viewer") this.initSearch();
     cx.spawn(async (cx) => {
       try {
         const r = await this.helper("dir");
@@ -1114,7 +1120,7 @@ export default class ReadingList extends View {
       else if (kind.how === "markdown") return { ...base, how: "markdown", text: stripThreads(text) };
       else {
         const t = theme();
-        return { ...base, how: "text", code: EditorState.new({ language: kind.lang, readonly: true, value: text,
+        return { ...base, how: "text", text, code: EditorState.new({ language: kind.lang, readonly: true, value: text,
           font_family: settings().font_family, font_size: 12,
           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } }) };
       }
@@ -1441,10 +1447,11 @@ export default class ReadingList extends View {
 
   // ---- the preview (beside or below the list, or the whole viewer pane) ----
 
-  previewBody(item, t) {
+  previewBody(item, how, t) {
     const message = (text) => div().p(14).text_size(12).text_color(t.dim).child(text);
     const pv = this.pv?.id === itemKey(item) ? this.pv : null;
     if (!pv) return message("Loading preview…");
+    if (how === "full" && this.sr && this.sr.pv === pv) return this.searchBody(pv, t);
     switch (pv.how) {
       case "url":
         return v_flex().p(14).gap(8).text_size(12)
@@ -1505,7 +1512,8 @@ export default class ReadingList extends View {
         .when(roomy, (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(where)))
         .when(Boolean(source), (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(source)))
         .when(roomy && Boolean(item.note), (el) => el.child(div().text_size(11.5).text_color(t.muted).child(item.note))))
-      .child(this.previewBody(item, t));
+      .when(how === "full" && this.sBar?.id === k, (el) => el.child(this.searchBar(t)))
+      .child(this.previewBody(item, how, t));
   }
 
   sized(el) {
@@ -1518,15 +1526,201 @@ export default class ReadingList extends View {
 
   renderViewer(cx) {
     const t = theme();
-    const id = selectedId(shared(SELECTED));
-    const item = this.items.find((i) => itemKey(i) === id);
+    const item = this.viewerItem();
     if (item) this.wantPreview(item, this.width ?? 0, cx);
+    this.followSearch(item);
     return this.sized(v_flex().id("readlist-viewer").track_focus(this.handle).size_full().min_h(0).bg(t.background).text_size(13))
-      .on_key_down((e, cx) => { if (this.act(KEYS[e.keystroke], cx)) cx.stop_propagation(); })
+      .on_mouse_down("left", () => { if (!this.sTyping) this.handle.focus(); })
+      .on_key_down((e, cx) => {
+        if (!this.viewerKey(e.keystroke, cx)) return;
+        cx.stop_propagation();
+        cx.notify();
+      })
       .child(item ? this.previewPane(item, "full", t)
         : div().p(16).text_size(12).text_color(t.dim).child(this.loaded
           ? "Select an item in the reading list to show it here. v closes this pane."
           : ""));
+  }
+
+  // ---- search in the viewer (core/search.js, docs/design.md 4.3) ----
+
+  // `sr` is the search on now: { id, pv, query, matches, index, wrapped } (the item key and
+  // the preview searched); `sBar` the search bar, shown for item `id`, with `note` instead of
+  // the prompt when there is nothing to search. `sJump` asks the next frame to scroll to the
+  // current match.
+  initSearch() {
+    this.sr = null;
+    this.sBar = null;
+    this.sTyping = false;
+    this.sJump = false;
+    this.sScroll = VirtualListScrollHandle.new();
+    this.sInput = InputState.new({ placeholder: "Find in this item: Enter, then n / Shift-N" });
+    this.sInput.on("submit", (_e, cx) => { this.runSearch(); cx.notify(); });
+    this.sInput.on("focus", (_e, cx) => { this.sTyping = true; cx.notify(); });
+    this.sInput.on("blur", (_e, cx) => { this.sTyping = false; cx.notify(); });
+  }
+
+  // The item the viewer shows: the one selected last in any copy.
+  viewerItem() {
+    const id = selectedId(shared(SELECTED));
+    return this.items.find((i) => itemKey(i) === id) ?? null;
+  }
+
+  // The text a preview draws, to search; null when it draws none (an image, a folder, ...).
+  searchText(pv) {
+    return pv && (pv.how === "markdown" || pv.how === "text") && typeof pv.text === "string" ? pv.text : null;
+  }
+
+  // A key in the viewer: true when handled. While the prompt has the keyboard, Esc closes the
+  // search and everything else is typing (Enter arrives as the prompt's submit).
+  viewerKey(k, cx) {
+    if (this.sTyping) {
+      if (k !== "escape") return false;
+      this.closeSearch();
+      return true;
+    }
+    if (k === "/") {
+      this.openSearch();
+      return true;
+    }
+    if ((k === "n" || k === "shift-n") && this.sr) {
+      this.stepSearch(k === "n" ? 1 : -1);
+      return true;
+    }
+    if (k === "escape" && this.sBar) {
+      this.closeSearch();
+      return true;
+    }
+    return this.act(KEYS[k], cx);
+  }
+
+  // `/`: the prompt, empty (Enter on it repeats the search on now), or a note when the
+  // preview has no text.
+  openSearch() {
+    const item = this.viewerItem();
+    if (!item) return;
+    const id = itemKey(item);
+    const pv = this.pv?.id === id ? this.pv : null;
+    if (!pv) this.sBar = { id, note: "The preview is still loading." };
+    else if (this.searchText(pv) === null) this.sBar = { id, note: "Nothing to search in this preview." };
+    else {
+      this.sBar = { id };
+      this.sInput.set_value("");
+      this.sInput.focus();
+      return;
+    }
+    this.sr = null;
+  }
+
+  // Enter in the prompt: goes to the first match after the current one (from the top when
+  // there is none) and marks them all; an empty prompt repeats the search on now.
+  runSearch() {
+    const item = this.viewerItem();
+    const id = item ? itemKey(item) : null;
+    const pv = id && this.pv?.id === id ? this.pv : null;
+    const text = this.searchText(pv);
+    const query = this.sInput.value() || (this.sr?.id === id ? this.sr.query : "");
+    this.handle.focus();
+    if (text === null || !query) {
+      this.closeSearch();
+      return;
+    }
+    const cur = this.sr?.id === id ? this.sr.matches[this.sr.index] : null;
+    const matches = findMatches(text, query);
+    const at = firstFrom(matches, cur ? cur.start + 1 : 0);
+    this.sr = { id, pv, query, matches, index: at?.index ?? -1, wrapped: at?.wrapped ?? false };
+    this.sBar = { id };
+    this.sInput.set_value(query);
+    this.sJump = true;
+  }
+
+  // n and Shift-N: the next or previous match, wrapping.
+  stepSearch(dir) {
+    const at = step(this.sr.matches, this.sr.index, dir);
+    if (!at) return;
+    this.sr = { ...this.sr, index: at.index, wrapped: at.wrapped };
+    this.sJump = true;
+  }
+
+  // Esc: the bar goes and the preview draws as before.
+  closeSearch() {
+    this.sr = null;
+    this.sBar = null;
+    this.sInput.set_value("");
+    this.handle.focus();
+  }
+
+  // Each frame: a search ends when the selection moves to another item, and follows the
+  // shown item's text when its preview is made again (the file changed, or a reload),
+  // staying on the match at or after the one it was on.
+  followSearch(item) {
+    const id = item ? itemKey(item) : null;
+    if (this.sBar && this.sBar.id !== id) {
+      this.sr = null;
+      this.sBar = null;
+      this.sInput.set_value("");
+      return;
+    }
+    const pv = id && this.pv?.id === id ? this.pv : null;
+    if (!this.sr || !pv || pv === this.sr.pv) return;
+    const text = this.searchText(pv);
+    if (text === null) {
+      this.sr = null;
+      this.sBar = { id, note: "Nothing to search in this preview." };
+      return;
+    }
+    const cur = this.sr.matches[this.sr.index];
+    const matches = findMatches(text, this.sr.query);
+    const at = firstFrom(matches, cur ? cur.start : 0);
+    this.sr = { ...this.sr, pv, matches, index: at?.index ?? -1, wrapped: false };
+  }
+
+  searchBar(t) {
+    const note = this.sBar.note;
+    const sr = this.sr;
+    return h_flex().id("rl-search-bar").mx(14).mt(8).mb(2).h(26).px(7).gap(6).flex_none().items_center().rounded(6)
+      .border(1).border_color(this.sTyping ? t.accent : t.border).bg(t.background)
+      .child(svg(`${ICONS}/search.svg`).size(12).flex_none().text_color(t.dim))
+      .child(note
+        ? div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(note)
+        : Input.new(this.sInput).flex_1().min_w(0).h_full().text_size(12).text_color(t.foreground))
+      .when(Boolean(sr), (el) => el.child(div().flex_none().text_size(11).text_color(sr.matches.length ? t.dim : t.blocked)
+        .child(matchLabel(sr.matches, sr.index, sr.wrapped))))
+      .child(div().id("rl-search-x").flex_none().cursor_pointer().text_color(t.dim).hover((s) => s.text_color(t.foreground))
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { this.closeSearch(); cx.notify(); })
+        .tooltip("Close the search (Esc)")
+        .child(svg(`${ICONS}/x.svg`).size(12)));
+  }
+
+  // The shown item's text while a search is on: drawn here, row by row in the code font, so
+  // every match can be marked and the current one scrolled to (markdown shows as its source).
+  searchBody(pv, t) {
+    const sr = this.sr;
+    const text = pv.text;
+    const cols = Math.floor(((this.width ?? 400) - 28 - 14) / (SEARCH_FONT * MONO_WIDTH));
+    if (this.sRows?.text !== text || this.sRows.cols !== cols) this.sRows = { text, cols, rows: wrapRows(text, cols) };
+    const rows = this.sRows.rows;
+    if (this.sJump && sr.index >= 0) {
+      this.sScroll.scroll_to_item(rowOf(rows, sr.matches[sr.index].start), "center");
+      this.sJump = false;
+    }
+    const font = settings().font_family;
+    const row = (r) => h_flex().h(SEARCH_LINE).flex_none().overflow_hidden().whitespace_nowrap()
+      .when(typeof font === "string" && font.length > 0, (el) => el.font_family(String(font)))
+      .text_size(SEARCH_FONT).text_color(t.foreground)
+      .children(segments(text, r, sr.matches, sr.index).map((s) => div().flex_none()
+        .when(s.mark === "match", (el) => el.bg(t.selection).rounded(2))
+        .when(s.mark === "current", (el) => el.bg(t.accent).text_color(t.accent_foreground).rounded(2))
+        .child(s.text)));
+    return div().id("rl-search").relative().flex_1().min_h(0)
+      .child(v_virtual_list("rl-search-rows", rows.length, SEARCH_LINE, (index) => String(index),
+        (range) => rows.slice(range.start, range.end).map(row))
+        .track_scroll(this.sScroll)
+        .size_full()
+        .px(14)
+        .py(6))
+      .child(Scrollbar.vertical("rl-search-rows").absolute().inset_0());
   }
 
   render(cx) {

@@ -98,6 +98,18 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   this machine and every other one again now. Each is also a command,
   `readlist.<down|up|top|bottom|open|preview|pane|reveal|copy|read|done|undo|delete|view|find|filter|viewer|focus|install-rl|refresh|claude-files|handler>`,
   which only the copy that had the keyboard last acts on (else the sidebar's).
+- **Search in the viewer** (while the `v` pane has the keyboard; a click on it gives it the
+  keyboard): `/` opens a search bar under the pane's header (26 high, a search icon, the prompt
+  "Find in this item: Enter, then n / Shift-N", an x). Enter goes to the first match after the
+  current one (from the top when there is none; an empty prompt repeats the search) and the body
+  turns into the item's text drawn row by row in the code font (12, 18-high rows, long lines
+  wrapped; markdown as its source) with every match on `selection` and the current one on `accent`
+  in `accent_foreground`, scrolled to the middle; the bar says "3 of 12" (11 `dim`), "no matches"
+  (`blocked`) or "3 of 12 · wrapped". `n`/Shift-N go to the next/previous match, wrapping; Esc closes
+  the search and the preview draws as before. Literal text, case-insensitive unless the query has
+  an uppercase letter. Images, thumbnails, folders and links show "Nothing to search in this
+  preview." in the bar. The search ends when the selection moves to another item, and follows the
+  item's text when its file changes. The list's `/` filter and its other keys are unchanged.
 - **Opening**: files open with `open` (Linux: `xdg-open`); executable items (`.app`, scripts,
   `.command`, anything with an execute bit, installers, and on Linux `.desktop`, `.AppImage`, `.run`,
   `.deb`, `.rpm`, `.snap`, `.flatpak`...) are revealed in Finder or the file manager instead, with a
@@ -194,7 +206,8 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   opened by `mod.open:readlist`), `{role: "viewer"}` (the `v` pane), `{menu, target}` (a filter
   menu). `core/*.js` are pure functions and shell scripts, node-tested: `items.js` (parse, types,
   open action), `state.js` (read/done state), `filters.js`, `arrival.js` (toast claims),
-  `inbox.js`, `preview.js`, `viewer.js`, `install.js`, `remote.js` (the poll, each machine's
+  `inbox.js`, `preview.js`, `viewer.js`, `search.js` (search in the viewer: matches, smart case,
+  next/previous, rows), `install.js`, `remote.js` (the poll, each machine's
   online/offline state, local copies), `sent.js` (files Claude Code agents sent: the transcript
   scan, the record of what was added). `icons/` are Lucide SVGs (ISC).
 - `mods/readlist/bin/rl`: the producer, POSIX `sh` and `awk`. Writes `items/<id>.json` atomically

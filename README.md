@@ -163,8 +163,22 @@ In the list:
 | `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch and Actions (built-in or your handler) |
 | Shift-R | list this machine and every other one again now |
 
-Each key is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can bind in
-`keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the popup.
+In the `v` pane (click it to give it the keyboard), you can search the item it shows, like `less`:
+
+| Key | Does |
+|---|---|
+| `/` | a search prompt; Enter goes to the first match after the current one and marks them all, with "3 of 12" in the bar (Enter on an empty prompt repeats the search) |
+| `n` / Shift-N | next / previous match, wrapping at the ends ("wrapped" in the bar) |
+| Esc | close the search |
+| `v` | close the pane |
+
+The search is literal text, case-insensitive unless the query has a capital letter. It covers
+markdown, text and code; while it is on, the item shows as plain text (markdown as its source),
+and it ends when the selection moves to another item. Images, thumbnails and folders have nothing
+to search, and `/` says so.
+
+Each key in the list is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can
+bind in `keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the popup.
 
 In a pane 520 px or wider, the selected item's preview shows beside the list: markdown rendered,
 text and code highlighted, images, a folder's entries, and on macOS a Quick Look thumbnail of HTML,
