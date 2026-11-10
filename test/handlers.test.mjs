@@ -410,6 +410,7 @@ const handler = (file, args, path) => {
 test("macOS: open, open -R and qlmanage exactly as before", posix, () => {
   const s = stubs({});
   for (const p of ["open", "qlmanage"]) writeFileSync(join(s.bin, p), `#!/bin/sh\necho ${p} >> '${s.log}'\n${logArgs(s.log)}\n`, { mode: 0o755 });
+  writeFileSync(join(s.bin, "osascript"), "#!/bin/sh\n", { mode: 0o755 });
   const path = "/a/b c; $(x).md";
   let r = handler(MACOS, ["open", "--", path], `${s.bin}:${SYS}`);
   assert.equal(r.status, 0, r.stderr);
@@ -423,6 +424,34 @@ test("macOS: open, open -R and qlmanage exactly as before", posix, () => {
   assert.deepEqual(s.args(), ["open", path, "open", "-R", path, "qlmanage", "-p", path]);
   assert.equal(handler(MACOS, ["open-url", "--", "https://x.dev"], SYS).status, NOT_HANDLED);
   assert.equal(handler(MACOS, ["open", path], SYS).status, 2, "no -- separator: refused");
+});
+
+test("macOS: preview brings the Quick Look panel to the front without holding up its token", posix, () => {
+  const s = stubs({ qlmanage: "exec sleep 30" });
+  // The activator stays running as long as it likes: the handler returns at once anyway.
+  writeFileSync(join(s.bin, "osascript"), `#!/bin/sh\n${logArgs(s.log)}\nexec sleep 5\n`, { mode: 0o755 });
+  const r = handler(MACOS, ["preview", "--", "/a/b.md"], `${s.bin}:${SYS}`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.ms < 3000, `took ${r.ms} ms`);
+  const pid = r.stdout.trim();
+  assert.match(pid, /^\d+$/);
+  const logged = () => (existsSync(s.log) ? s.args() : []);
+  for (let i = 0; i < 50 && logged().length < 4; i++) spawnSync("sleep", ["0.05"]);
+  const a = logged();
+  spawnSync("kill", [pid]);
+  assert.deepEqual([a[0], a[1], a[2], a.at(-1)], ["-l", "JavaScript", "-e", pid], "osascript is given Quick Look's pid");
+  const script = a.slice(3, -1).join("\n");
+  assert.match(script, /runningApplicationWithProcessIdentifier\(pid\)/);
+  assert.match(script, /activateWithOptions/);
+  assert.doesNotMatch(script, /System Events|Application\(/, "no Apple Events, so no Automation prompt");
+});
+
+test("macOS: preview still gives its token when osascript is missing", posix, () => {
+  const s = stubs({ qlmanage: "exec /bin/sleep 30" });
+  const r = handler(MACOS, ["preview", "--", "/a/b.md"], s.bin);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^\d+\n$/);
+  spawnSync("kill", [r.stdout.trim()]);
 });
 
 test("macOS: preview-close kills that pid only while it is Quick Look", posix, () => {
@@ -560,6 +589,16 @@ test("Linux: no Sushi or no gdbus is not handled, with the reason the toast show
   r = handler(LINUX, ["preview", "--", "/a"], stubs({}).bin);
   assert.equal(r.status, NOT_HANDLED);
   assert.equal(shortError(r.stderr), "Space's preview window needs gdbus and GNOME Sushi");
+});
+
+test("Linux: Sushi that does not answer is a failure, not missing, so Space asks again", posix, () => {
+  const s = stubs({ gdbus: "echo 'Error: Timeout was reached' >&2; exit 1" });
+  let r = handler(LINUX, ["preview", "--", "/a"], `${s.bin}:${SYS}`);
+  assert.equal(r.status, 1);
+  assert.equal(shortError(r.stderr), "GNOME Sushi did not answer");
+  const nobus = stubs({ gdbus: "echo 'Error connecting: Cannot autolaunch D-Bus without X11 $DISPLAY' >&2; exit 1" });
+  r = handler(LINUX, ["preview", "--", "/a"], `${nobus.bin}:${SYS}`);
+  assert.equal(r.status, NOT_HANDLED, "no session bus: no Sushi this session");
 });
 
 test("Linux: no thumbnails and no link opener: not handled", posix, () => {

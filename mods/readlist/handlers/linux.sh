@@ -66,18 +66,25 @@ xdg() {
 
 # GNOME Sushi (Nautilus's previewer, started by D-Bus on demand) shows the file at $1; $2
 # is "true" to close it instead when it is already showing. The current interface, then the
-# older one.
+# older one. Not handled only when Sushi cannot be there (no session bus, or D-Bus knows no
+# such service): the mod then stops asking for the session, so a call that fails for another
+# reason (a timeout, a crash) is a plain failure, and the next Space tries again.
 sushi() {
 	command -v gdbus >/dev/null 2>&1 || {
 		echo "Space's preview window needs gdbus and GNOME Sushi" >&2
 		exit 10
 	}
 	u=$(uri "$1")
-	call() { gdbus call --session --timeout 5 --dest org.gnome.NautilusPreviewer --object-path /org/gnome/NautilusPreviewer --method "$@" >/dev/null 2>&1; }
-	call org.gnome.NautilusPreviewer2.ShowFile "'$u'" "''" "$2" && exit 0
-	call org.gnome.NautilusPreviewer.ShowFile "'$u'" 0 "$2" && exit 0
-	echo "Space's preview window needs GNOME Sushi (the sushi package)" >&2
-	exit 10
+	call() { gdbus call --session --timeout 5 --dest org.gnome.NautilusPreviewer --object-path /org/gnome/NautilusPreviewer --method "$@" 2>&1 >/dev/null; }
+	e2=$(call org.gnome.NautilusPreviewer2.ShowFile "'$u'" "''" "$2") && exit 0
+	e1=$(call org.gnome.NautilusPreviewer.ShowFile "'$u'" 0 "$2") && exit 0
+	case "$e2$e1" in *ServiceUnknown* | *NameHasNoOwner* | *"Error connecting"*)
+		echo "Space's preview window needs GNOME Sushi (the sushi package)" >&2
+		exit 10
+		;;
+	esac
+	echo "GNOME Sushi did not answer" >&2
+	exit 1
 }
 
 case $action in

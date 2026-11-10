@@ -84,8 +84,8 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   the popup.
 - **Keys** (while the list has the keyboard; a click on it gives it the keyboard): click or
   `j`/`k`/arrows/`g`/`G`/Home/End select (selecting never opens); Enter or a double-click opens in
-  the default app and marks read (the popup then closes); Space toggles the macOS Quick Look panel,
-  on Linux GNOME Sushi (doesn't mark read; without Sushi it shows or hides the in-pane preview as
+  the default app and marks read (the popup then closes); Space toggles the macOS Quick Look panel
+  (brought to the front as the active app), on Linux GNOME Sushi (doesn't mark read; without Sushi it shows or hides the in-pane preview as
   `p` does, or in the rail opens the `v` pane, with a one-time toast saying Sushi is missing); `p`
   preview in the pane; `v` opens a preview-only pane on the right of the
   window that follows the selection of any copy (`v` again closes it); `o` reveals in Finder (the
@@ -154,9 +154,10 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   preview, the type's icon), else an error whose first stderr line is toasted. 15 s per action,
   30 s per thumbnail, one try each; a thumbnail that failed or that no handler made is not asked
   for again until the file or the handlers change. The built-in ones are `handlers/macos.sh`
-  (`open`, `open -R`, `qlmanage -p` with its pid as the token and `kill` of that pid only while it
-  is `qlmanage`, `qlmanage -t`) and `handlers/linux.sh` (`xdg-open`, the FileManager1 call, GNOME
-  Sushi; `other` keeps Sushi's window; no thumbnails), picked by `window().platform`.
+  (`open`, `open -R`, `qlmanage -p` with its pid as the token, brought to the front by `osascript`,
+  and `kill` of that pid only while it is `qlmanage`, `qlmanage -t`) and `handlers/linux.sh`
+  (`xdg-open`, the FileManager1 call, GNOME Sushi, not handled only with no `gdbus`, no session bus
+  or no Sushi service; `other` keeps Sushi's window; no thumbnails), picked by `window().platform`.
   The person's own `~/.config/herdr-app/readlist/handler` is tried first only after they turn it
   on (the `f` menu's Actions, `readlist.handler`); that records its real path and SHA-256 in
   `~/.config/herdr-app/readlist/trust.json`. `run-handler` checks it before every run and exits 11
@@ -256,7 +257,7 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - `keys.json`: `"global": {"cmd-shift-i": "mod.open:readlist", "ctrl-shift-i": "mod.open:readlist"}`.
   Merge only your platform's: `cmd-shift-i` on macOS, `ctrl-shift-i` on Linux and Windows (free in
   Herdr's shipped keys there).
-- Programs it runs: `sh`, `open`, `qlmanage` (macOS), `xdg-open`, `gdbus` (Linux, both optional), `stat`, `head`, `ls`, `cp`, `mv`, `rm`, `ps`/`kill`, `pgrep`, `grep`, `awk`, `sed`
+- Programs it runs: `sh`, `open`, `qlmanage`, `osascript` (macOS), `xdg-open`, `gdbus` (Linux, both optional), `stat`, `head`, `ls`, `cp`, `mv`, `rm`, `ps`/`kill`, `pgrep`, `grep`, `awk`, `sed`
   (only the Quick Look panel or thumbnail it started), `base64`, `hc`, `scp` and `shasum` (through
   `rl`), `id`, `find`, `readlink`, `sha256sum` or `shasum`, `od` (handlers), and the person's own
   handler once they turn it on; on other machines, through Herdr, `sh`, `cat`, `stat`, `head`, `ls`, `base64`, `dd`, `rm`
@@ -272,6 +273,13 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   and pruned when items go.
 - `qlmanage -p` must run in the background (`& echo $!`) or `exec`'s 30 s limit kills the panel;
   closing it kills only that pid, and only while it is still `qlmanage`.
+- `qlmanage -p` does not activate itself, so its panel opens behind Herdr. The handler activates
+  it once its window is on screen: `osascript -l JavaScript` with
+  `NSRunningApplication.activateWithOptions` on its pid, in the background. That sends no Apple
+  Events, so there is no Automation or Accessibility prompt (telling System Events to set the
+  process frontmost would ask for Automation consent). Handing the focus back to Herdr puts
+  Herdr's window over the panel again, so the panel stays the active app until it closes. macOS
+  honours the activation only while Herdr is the frontmost app, which it is when Space is pressed.
 - Every shown copy gets every `readlist.<command>`; without the "keyboard owner" in shared state,
   `j` would move every copy at once. Commands reach shown copies only.
 - Several copies see the same arrival: claim in shared state and toast only what is still yours

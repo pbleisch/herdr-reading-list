@@ -403,6 +403,10 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
 - These calls are the built-in macOS handler, `handlers/macos.sh` (4.7). Open is `open "$path"`.
   Quick Look is `qlmanage -p "$path"` started in the background, so the panel is not tied to the `exec` call and its 30 s limit (rows 26b
   and 29); the mod keeps the pid and Space again kills that pid, only while it is still `qlmanage`.
+  `qlmanage` does not activate itself, and on macOS 27 its panel opened behind Herdr, so the
+  handler then activates its pid with `osascript -l JavaScript`
+  (`NSRunningApplication.activateWithOptions`, no Apple Events, so no consent prompt) once its
+  window is on screen. The panel is then the active app until it closes.
   Quick Look only draws a preview, so it is safe for every type, executables included. Enter on
   executable types (`.app`, `.command`, scripts) reveals in Finder instead of opening, as herdr-md
   does for every non-markdown file. The rule (`core/items.js` `openAction`), checked again at the
@@ -427,9 +431,10 @@ script exits 127 and says what to install, and the mod shows that in a toast).
   `.bin`, `.deb`, `.rpm`, `.snap`, `.flatpak`, `.flatpakref`, `.flatpakrepo`).
 - Space is GNOME Sushi: `org.gnome.NautilusPreviewer2.ShowFile(uri, '', close)` (the older
   `org.gnome.NautilusPreviewer.ShowFile(uri, 0, close)` second), D-Bus starting Sushi on demand;
-  Space again on the same item passes `close` true. With no Sushi (`ServiceUnknown`) or no
-  `gdbus`, a one-time toast says so and Space shows or hides the in-pane preview instead (in the
-  narrow rail, the `v` pane).
+  Space again on the same item passes `close` true. With no Sushi (`ServiceUnknown`), no session
+  bus or no `gdbus`, a one-time toast says so and Space shows or hides the in-pane preview
+  instead (in the narrow rail, the `v` pane).
+  A call that fails another way (a timeout) is an error toast, and the next Space asks Sushi again.
 - Thumbnails: none (the handler passes). Images GPUI draws are copied into the cache and shown as
   on macOS; HTML draws as on macOS; PDF, other images and binary files show their type's icon with "Enter opens it".
 - Paths reach D-Bus as GVariant string literals with every byte that is not unreserved
@@ -697,7 +702,7 @@ the design says what happens if it is wrong.
 | 26b | A program started by `exec` dies when the call ends; long-lived helpers use `hc run --bg --no-parent --rm` | V-mod (herdr-workbench `serve.js:32-45`) | Applies to the Quick Look panel (row 29) |
 | 27 | `open <path>` opens in the default app; `open -R` reveals in Finder; `open -a <App>` | Assumed (standard macOS, not run) | |
 | 28 | `qlmanage -t -s N -o dir files...` thumbnails md, HTML (with CSS), PDF page 1 and images | V-spike | A.3 |
-| 29 | `qlmanage -p <file>` shows the Quick Look panel and stays open past `exec`'s 30 s limit | V-spike (0.1.13, again 0.1.14) | the mod starts it with `sh -c 'qlmanage -p "$1" ... & echo $!'`: the panel (816x849 window) was on screen, still open after 35 s, closed by killing the pid; the item stayed unread. Increment 2 rechecked it through `herdr-app do readlist.preview`: the window list showed an on-screen 816x849 `qlmanage` window frontmost, Herdr stayed the active app (so the next Space reaches the list), and the second `readlist.preview` ended the process. `screencapture` run from an agent's shell does not capture the panel's pixels, so that look is not in the screenshots |
+| 29 | `qlmanage -p <file>` shows the Quick Look panel and stays open past `exec`'s 30 s limit | V-spike (0.1.13, again 0.1.14) | the mod starts it with `sh -c 'qlmanage -p "$1" ... & echo $!'`: the panel (816x849 window) was on screen, still open after 35 s, closed by killing the pid; the item stayed unread. Increment 2 rechecked it through `herdr-app do readlist.preview`: the window list showed an on-screen 816x849 `qlmanage` window frontmost, Herdr stayed the active app (so the next Space reaches the list), and the second `readlist.preview` ended the process. `screencapture` run from an agent's shell does not capture the panel's pixels, so that look is not in the screenshots. On macOS 27.0.1 the window list showed the `qlmanage` window behind Herdr's with Herdr active, so the handler now activates the panel after it opens; the panel is then the active app |
 | 30 | No `Intl`, `TextEncoder`, `structuredClone` in the mod engine | V-spike | hashing and relative times by hand, so ids come from the producer |
 | 31 | `herdr-app check` runs `init` and one `render` only | V-docs | AGENTS.md:54-58 |
 | 32 | A mod cannot set its own pane header title (so no badge in the header) | **Assumed** | `PaneInfo.title` is "the mod's name" (herdr.d.ts:190); the count goes in the pane's own top row |

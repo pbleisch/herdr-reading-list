@@ -15,6 +15,24 @@
 set -u
 action=${1-}
 
+# JavaScript for osascript: activates the app with pid argv[0] once it has a window on screen,
+# checking every 50 ms for up to 3 s.
+front='ObjC.import("AppKit"); ObjC.import("CoreGraphics");
+function run(argv) {
+	const pid = Number(argv[0]);
+	for (let i = 0; i < 60; i++) {
+		const ws = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0));
+		for (let j = 0; j < ws.count; j++) {
+			const w = ws.objectAtIndex(j);
+			if (ObjC.unwrap(w.objectForKey("kCGWindowOwnerPID")) !== pid || ObjC.unwrap(w.objectForKey("kCGWindowLayer")) !== 0) continue;
+			const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
+			if (!app.isNil()) app.activateWithOptions(0);
+			return;
+		}
+		delay(0.05);
+	}
+}'
+
 case $action in
 open)
 	[ "${2-}" = -- ] && [ $# -eq 3 ] || exit 2
@@ -28,7 +46,13 @@ preview)
 	# In the background, so the panel outlives the mod's exec call; its pid is the token.
 	[ "${2-}" = -- ] && [ $# -eq 3 ] || exit 2
 	qlmanage -p "$3" >/dev/null 2>&1 </dev/null &
-	echo $!
+	q=$!
+	echo $q
+	# qlmanage does not come to the front by itself, so its panel opens behind Herdr: once
+	# its window is on screen (within 3 s), it is made the active app, as an app opened from
+	# Finder would be. NSRunningApplication sends no Apple Events, so there is no
+	# Automation or Accessibility prompt. In the background, so the token is not held up.
+	osascript -l JavaScript -e "$front" "$q" >/dev/null 2>&1 </dev/null &
 	;;
 preview-close)
 	# Kills that pid only while it is still Quick Look.

@@ -48,7 +48,7 @@ checks the mod. To do it by hand, copy the `mods/readlist` folder there yourself
 Linux and Windows), and run `herdr-app check ~/.config/herdr-app/mods/readlist`.
 
 What the mod does on your computer: it runs programs (`sh` scripts, its own `rl`, and on macOS
-`open` and `qlmanage` for Quick Look and thumbnails, on Linux `xdg-open` and `gdbus` for the file
+`open`, `qlmanage` for Quick Look and thumbnails and `osascript` to bring Quick Look to the front, on Linux `xdg-open` and `gdbus` for the file
 manager and GNOME Sushi, on Windows `pwsh` with its own scripts, `explorer.exe` and QuickLook or
 Peek if installed, and only if you turn it on, your own handler), reads the files on the list
 wherever they are (and, only if
