@@ -11,14 +11,11 @@ default app when you press Enter.
 
 | | Open (Enter) | Show in the file manager (`o`) | Space: preview window | Thumbnails in the pane | Popup key |
 |---|---|---|---|---|---|
-| macOS | `open` | Finder (`open -R`) | Local browser viewer for HTML; Quick Look for other files | Quick Look (PDF, ...) | `cmd-shift-i` |
-| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | Local browser viewer for HTML; GNOME Sushi for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
-| Windows | the default app | Explorer (`explorer /select,`) | Local browser viewer for HTML; QuickLook or PowerToys Peek for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+| macOS | `open` | Finder (`open -R`) | Quick Look | Quick Look (PDF, ...) | `cmd-shift-i` |
+| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | GNOME Sushi, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+| Windows | the default app | Explorer (`explorer /select,`) | the QuickLook app or PowerToys Peek, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
 
-The HTML browser viewer needs Node.js 20 or newer and a browser on each platform. It
-bundles its frontend locally and keeps untrusted HTML scripts disabled; see the
-[viewer contract](docs/viewer-contract.md). Without Node or a browser, Space shows the native HTML
-preview in the pane. Linux is supported: opening needs `xdg-open` (xdg-utils), showing in the file
+macOS has everything. Linux is supported: opening needs `xdg-open` (xdg-utils), showing in the file
 manager works with any file manager that answers the freedesktop `FileManager1` call (Nautilus,
 Dolphin, Nemo, Caja, Thunar...), and the Space preview window needs GNOME Sushi (the `sushi`
 package). Without Sushi, Space shows or hides the preview in the pane instead and says so once;
@@ -31,12 +28,12 @@ Windows is supported with PowerShell 7 (`pwsh`, which Herdr also uses as the def
 in `mods/readlist/bin/windows` where macOS and Linux run `sh`, `rl` is `rl.ps1` (with `rl.cmd` for
 cmd.exe and other programs, and an `rl` shim for Git Bash), and the list lives in
 `%LOCALAPPDATA%\reading-list`. Space opens the [QuickLook](https://github.com/QL-Win/QuickLook) app
-or PowerToys Peek for non-HTML files when either is installed. A Windows machine is not listed from another machine
+or PowerToys Peek when either is installed. A Windows machine is not listed from another machine
 yet (it has no `sh` for the list's scripts there).
 
-The non-HTML actions go through the built-in handlers (`mods/readlist/handlers/macos.sh`,
-`linux.sh` and `windows.ps1`). The HTML viewer runs after your opted-in Space handler has had
-its chance. See [Your own handler](#your-own-handler).
+Each of these actions is a handler: a small program the list runs with the item. The table is what
+the built-in handlers do (`mods/readlist/handlers/macos.sh`, `linux.sh` and `windows.ps1`); you can
+put your own in front of them, see [Your own handler](#your-own-handler).
 
 ## Install
 
@@ -154,7 +151,7 @@ In the list:
 |---|---|
 | click, `j` / `k`, arrows, `g` / `G` | select (selecting never opens anything) |
 | Enter, double-click | open in its app; marks it read |
-| Space | local browser viewer for HTML; Quick Look, GNOME Sushi, QuickLook or PowerToys Peek for other files where available (again closes the preview) |
+| Space | Quick Look panel on macOS, GNOME Sushi on Linux, QuickLook or PowerToys Peek on Windows (again closes it) |
 | `p` | show or hide the preview in the pane |
 | `v` | a preview pane on the right of the window that follows the selection |
 | `o` | show in Finder (the file manager on Linux, Explorer on Windows) |
