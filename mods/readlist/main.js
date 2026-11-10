@@ -32,7 +32,7 @@ import { parseInbox, inboxPlan } from "./core/inbox.js";
 import { isClaudeAgent, foregroundPid, parseScan, sentPlan, sentOn, setSent, sentAddArgs } from "./core/sent.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "./core/viewer.js";
 import { findMatches, firstFrom, step, matchLabel, wrapRows, rowOf, segments } from "./core/search.js";
-import { SCROLL_KEYS, keyOffset, wheelOffset, centerOffset, clampOffset, maxOffset, visibleRows, thumb, trackOffset } from "./core/scroll.js";
+import { SCROLL_KEYS, keyOffset, wheelOffset, centerOffset, alignOffset, clampOffset, maxOffset, visibleRows, thumb, trackOffset } from "./core/scroll.js";
 import { NAME } from "./core/name.js";
 import { INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
 import { POLL_MS, POLL_TIMEOUT_MS, ASK_MS, POLL_SCRIPT, BASE64_SCRIPT, parsePoll, afterPoll, syncMachines, pollPaths, unstated, mergeItems, onMachine, listedMachines, isOffline, safeName, copyPaths, parseMeta, isStale, fetchRoute, needsAsk, fetchedLabel, sizeLabel, remoteBanner } from "./core/remote.js";
@@ -1612,7 +1612,10 @@ export default class ReadingList extends View {
       return true;
     }
     if (SCROLL_KEYS[k] && this.vsShown) {
-      this.scrollTo(this.vsShown, keyOffset(k, this.vsShown));
+      const s = this.vsShown, to = keyOffset(k, s);
+      // Text drawn as rows moves by whole rows, so no line is cut at the top (the end of
+      // the text stays reachable).
+      this.scrollTo(s, s.rows && to < maxOffset(s) ? alignOffset(to, SEARCH_LINE, ROWS_PAD, s) : to);
       return true;
     }
     return this.act(KEYS[k], cx);
@@ -1735,7 +1738,11 @@ export default class ReadingList extends View {
     if (this.sJump && s.view > 0) {
       if (sr.index >= 0) {
         const top = ROWS_PAD + rowOf(rows, sr.matches[sr.index].start) * SEARCH_LINE;
-        s.offset = centerOffset(top, top + SEARCH_LINE, s);
+        // On a row's top, so the line above is not cut under the search bar, unless that
+        // would push a match near the end of the text off the bottom.
+        const center = centerOffset(top, top + SEARCH_LINE, s);
+        const aligned = alignOffset(center, SEARCH_LINE, ROWS_PAD, s);
+        s.offset = top >= aligned && top + SEARCH_LINE <= aligned + s.view ? aligned : center;
       }
       this.sJump = false;
     }
@@ -1826,7 +1833,9 @@ export default class ReadingList extends View {
         .when(s.mark === "match", (el) => el.bg(t.selection).rounded(2))
         .when(s.mark === "current", (el) => el.bg(t.accent).text_color(t.accent_foreground).rounded(2))
         .child(s.text)));
-    this.scrollState(id, key).content = rowsHeight(rows);
+    const state = this.scrollState(id, key);
+    state.content = rowsHeight(rows);
+    state.rows = true;
     return this.scroller(id, key, t, (s) => {
       const shown = visibleRows(s, SEARCH_LINE, rows.length, ROWS_PAD);
       return div().absolute().inset_0().children(rows.slice(shown.start, shown.end).map((r, i) =>

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SCROLL_KEYS, LINE, MIN_THUMB, maxOffset, clampOffset, keyOffset, wheelOffset, centerOffset, visibleRows, thumb, trackOffset } from "../mods/readlist/core/scroll.js";
+import { SCROLL_KEYS, LINE, MIN_THUMB, maxOffset, clampOffset, keyOffset, wheelOffset, centerOffset, alignOffset, visibleRows, thumb, trackOffset } from "../mods/readlist/core/scroll.js";
 import { readableHtml, htmlText } from "../mods/readlist/core/preview.js";
 import { findMatches, wrapRows, rowOf } from "../mods/readlist/core/search.js";
 
@@ -60,6 +60,28 @@ test("centerOffset puts a span in the middle, as near as the ends allow", () => 
   assert.equal(centerOffset(1000, 1018, v(0)), 1009 - 250);
   assert.equal(centerOffset(10, 28, v(900)), 0);
   assert.equal(centerOffset(2990, 3000, v(0)), 2500);
+});
+
+test("alignOffset starts the box at a row's top, so a match jump never cuts a line", () => {
+  // Rows of 18 after 6 px, as the viewer's search draws them: 100 rows.
+  const rows = (offset, view = 500) => ({ offset, view, content: 100 * 18 + 12 });
+  assert.equal(alignOffset(0, 18, 6, rows(0)), 0, "the top stays the top");
+  assert.equal(alignOffset(2, 18, 6, rows(0)), 0, "near the top snaps to it");
+  assert.equal(alignOffset(5, 18, 6, rows(0)), 6, "past half the pad, the first row's top");
+  assert.equal(alignOffset(6 + 18 * 10 + 8, 18, 6, rows(0)), 6 + 18 * 10, "rounds down to a row");
+  assert.equal(alignOffset(6 + 18 * 10 + 10, 18, 6, rows(0)), 6 + 18 * 11, "rounds up to a row");
+  for (const o of [0, 37, 400, 777.5, 1000, 1312, 5000]) {
+    const a = alignOffset(o, 18, 6, rows(0));
+    assert.ok(a === 0 || (a - 6) % 18 === 0, `${o} -> ${a} is a row's top`);
+    assert.ok(a <= maxOffset(rows(0)), `${o} -> ${a} is within the last page`);
+  }
+  // A jump to a match centers it, then aligns: the match stays on screen.
+  const top = 6 + 57 * 18;
+  const a = alignOffset(centerOffset(top, top + 18, rows(0)), 18, 6, rows(0));
+  assert.ok(top >= a && top + 18 <= a + 500, "the match is still in the box");
+  assert.equal(alignOffset(50, 18, 6, rows(0, 500)), 42);
+  assert.equal(alignOffset(3, 18, 6, { offset: 0, view: 500, content: 300 }), 0, "text that fits does not scroll");
+  assert.equal(alignOffset(120, 0, 6, rows(0)), 120, "no row height leaves the offset as it is");
 });
 
 test("visibleRows covers the box and no more", () => {

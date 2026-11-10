@@ -105,7 +105,8 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   search draws (below, unhighlighted), only the rows on screen built. The wheel and the trackpad
   move it (`on_scroll_wheel`), and while the pane has the keyboard `j`/`k` and Down/Up a line
   (40), Space/Shift-Space and Page Down/Page Up a page less a line, Ctrl-D/Ctrl-U half a page,
-  `g`/Home and Shift-G/End the ends. A 6-wide thumb (`muted` at 40%, rounded 3, 3 from the right,
+  `g`/Home and Shift-G/End the ends; text drawn as rows stops on a whole row at the top, except
+  at the end. A 6-wide thumb (`muted` at 40%, rounded 3, 3 from the right,
   at least 24 high) shows where it is when the text is longer than the box; a click on its track
   pages toward the click. Another item starts at the top; Esc on a search puts markdown and HTML
   at the same share of the way down as the search was.
@@ -115,7 +116,7 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   current one (from the top when there is none; an empty prompt repeats the search) and the body
   turns into the item's text drawn row by row in the code font (12, 18-high rows, long lines
   wrapped; markdown as its source, HTML as its text) with every match on `selection` and the current one on `accent`
-  in `accent_foreground`, scrolled to the middle; the bar says "3 of 12" (11 `dim`), "no matches"
+  in `accent_foreground`, scrolled to the middle with a whole row at the top; the bar says "3 of 12" (11 `dim`), "no matches"
   (`blocked`) or "3 of 12 · wrapped". `n`/Shift-N go to the next/previous match, wrapping; Esc closes
   the search and the preview draws as before. Literal text, case-insensitive unless the query has
   an uppercase letter. Images, thumbnails, folders and links show "Nothing to search in this

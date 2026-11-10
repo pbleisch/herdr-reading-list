@@ -40,6 +40,17 @@ export const wheelOffset = (dy, v) => clampOffset((v.offset || 0) - (Number(dy) 
 // The offset that puts the span [top, bottom) in the middle of the box.
 export const centerOffset = (top, bottom, v) => clampOffset((top + bottom) / 2 - (v.view || 0) / 2, v);
 
+// The offset nearest `offset` that starts the box at a row's top, for text drawn as rows of
+// height `h` after `pad` px, so no row is cut in half at the top of the box: the top itself,
+// or `pad` plus whole rows, no further than the last page allows.
+export function alignOffset(offset, h, pad, v) {
+  const o = clampOffset(offset, v);
+  if (!(h > 0)) return o;
+  let at = pad + Math.max(0, Math.round((o - pad) / h)) * h;
+  while (at > maxOffset(v) && at - h >= pad) at -= h;
+  return at > maxOffset(v) || o < pad / 2 ? 0 : at;
+}
+
 // Rows of height `h` after `pad` px: the ones the box shows (half-open, clamped to `count`).
 export function visibleRows(v, h, count, pad = 0) {
   const start = Math.max(0, Math.floor(((v.offset || 0) - pad) / h));

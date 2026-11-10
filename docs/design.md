@@ -327,7 +327,8 @@ nothing is shadowed.
   (its text: `htmlText`), text and code. `TextView` and `Editor` can neither mark text nor scroll
   to an offset, so while a search is on the viewer draws the text itself: rows in the code font,
   long lines wrapped at the columns the pane holds (a monospace character taken as 0.62 of the
-  font size), every match marked and the current one scrolled to the middle. Markdown shows as its
+  font size), every match marked and the current one scrolled to the middle, with a whole row at the top
+  (rows also scroll by whole rows from the keys). Markdown shows as its
   source then, HTML as its text; Esc puts them at the same share of the way down as the search
   was.
 - A preview without text (an image, a thumbnail, a folder, a link, a missing file) says "Nothing
