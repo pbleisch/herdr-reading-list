@@ -57,6 +57,76 @@ json_str() {
 		}'
 }
 
+# A markdown heading's text as a plain title: code spans keep their text without the
+# backticks; links and images keep their text; **, __, ~~, * and _ around words go (an _
+# inside a word, as in snake_case, stays); \-escapes keep the character; spaces collapse.
+plain_title() {
+	printf '%s\n' "$1" | awk '
+		function word(c) { return c ~ /[A-Za-z0-9]/ }
+		# Drops delimiter d around the spans matching re, unless the span starts or ends with
+		# a space or, for _, sits inside a word.
+		function unwrap(s, re, d,    out, n, inner, before, after, ok) {
+			out = ""; n = length(d)
+			while (match(s, re)) {
+				inner = substr(s, RSTART + n, RLENGTH - 2 * n)
+				before = RSTART > 1 ? substr(s, RSTART - 1, 1) : ""
+				after = substr(s, RSTART + RLENGTH, 1)
+				ok = inner !~ /^[ \t]/ && inner !~ /[ \t]$/
+				if (d ~ /_/ && (word(before) || word(after))) ok = 0
+				if (ok) { out = out substr(s, 1, RSTART - 1) inner; s = substr(s, RSTART + RLENGTH) }
+				else { out = out substr(s, 1, RSTART); s = substr(s, RSTART + 1) }
+			}
+			return out s
+		}
+		# [text](url), [text][ref] and ![alt](url) become their text.
+		function links(s,    out, i, rest, j, text, after, k, pre) {
+			out = ""
+			while ((i = index(s, "[")) > 0) {
+				rest = substr(s, i + 1)
+				j = index(rest, "]")
+				if (j == 0) break
+				text = substr(rest, 1, j - 1); after = substr(rest, j + 1); pre = substr(s, 1, i - 1)
+				k = 0
+				if (substr(after, 1, 1) == "(") k = index(after, ")")
+				else if (substr(after, 1, 1) == "[") k = index(after, "]")
+				if (k == 0) { out = out substr(s, 1, i); s = rest; continue }
+				if (substr(pre, length(pre), 1) == "!") pre = substr(pre, 1, length(pre) - 1)
+				out = out pre text; s = substr(after, k + 1)
+			}
+			return out s
+		}
+		{
+			s = $0
+			gsub(/\\`/, "\027", s)
+			# Code spans: a run of backticks up to the same run. Set aside, so nothing inside changes.
+			t = ""; n = 0
+			while (match(s, /`+/)) {
+				tick = substr(s, RSTART, RLENGTH); pre = substr(s, 1, RSTART - 1); rest = substr(s, RSTART + RLENGTH)
+				j = index(rest, tick)
+				if (j == 0) { t = t pre tick; s = rest; continue }
+				c = substr(rest, 1, j - 1)
+				if (c ~ /^ .*[^ ].* $/) c = substr(c, 2, length(c) - 2)
+				code[++n] = c
+				t = t pre "\001" n "\002"; s = substr(rest, j + length(tick))
+			}
+			s = t s
+			gsub(/\\\\/, "\020", s); gsub(/\\\*/, "\021", s); gsub(/\\_/, "\022", s); gsub(/\\~/, "\023", s)
+			gsub(/\\\[/, "\024", s); gsub(/\\\]/, "\025", s); gsub(/\\</, "\026", s); gsub(/\\#/, "#", s)
+			s = links(s)
+			while (match(s, /<[A-Za-z][A-Za-z0-9.+-]*:[^ <>]*>/)) s = substr(s, 1, RSTART - 1) substr(s, RSTART + 1, RLENGTH - 2) substr(s, RSTART + RLENGTH)
+			s = unwrap(s, "\\*\\*[^*]+\\*\\*", "**"); s = unwrap(s, "__[^_]+__", "__"); s = unwrap(s, "~~[^~]+~~", "~~")
+			s = unwrap(s, "\\*[^*]+\\*", "*"); s = unwrap(s, "_[^_]+_", "_")
+			for (k = n; k >= 1; k--) {
+				p = "\001" k "\002"; i = index(s, p)
+				if (i) s = substr(s, 1, i - 1) code[k] substr(s, i + length(p))
+			}
+			gsub(/\020/, "\\", s); gsub(/\021/, "*", s); gsub(/\022/, "_", s); gsub(/\023/, "~", s)
+			gsub(/\024/, "[", s); gsub(/\025/, "]", s); gsub(/\026/, "<", s); gsub(/\027/, "`", s)
+			gsub(/[ \t]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s)
+			print s
+		}'
+}
+
 # Flattens JSON documents to "path<TAB>token" lines, one per scalar, where path
 # joins object keys and array indexes with "/" ("by/terminal", "labels/herdr.space")
 # and token is the value as written (strings keep their quotes and escapes, so a
@@ -299,6 +369,7 @@ cmd_add() {
 			case $real in
 			*.md | *.markdown | *.MD)
 				heading=$(head -n 400 <"$real" 2>/dev/null | tr -d '\r' | sed -n '/^# /{ s/^# *//; s/ *#* *$//; p; q; }')
+				[ -n "$heading" ] && heading=$(plain_title "$heading")
 				[ -n "$heading" ] && default_title=$heading
 				;;
 			esac

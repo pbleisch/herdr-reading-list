@@ -224,6 +224,26 @@ test("rl.ps1: add, re-add, --if-new, errors, URLs and folders, as the POSIX rl",
   assert.equal(json(f).by.from.endsWith("@pwsh"), true, "in PowerShell, the caller is pwsh");
 });
 
+test("rl.ps1: the title from a heading drops its inline markdown, as the POSIX rl", win, () => {
+  const s = scratch("rl-win-title-");
+  const env = { READING_LIST_DIR: join(s, "list") };
+  const file = join(s, "t.md");
+  const title = (heading) => {
+    writeFileSync(file, `# ${heading}\r\n\r\nbody\r\n`);
+    const r = ps(RL, ["add", file, "--kind", "fyi"], env);
+    assert.equal(r.status, 0, r.stderr);
+    return json(join(s, "list", "items", `${r.stdout.trim()}.json`)).title;
+  };
+  // The same cases as test/rl.test.sh.
+  assert.equal(title("Review: forecast cache layer (branch `cache-layer`)"), "Review: forecast cache layer (branch cache-layer)");
+  assert.equal(title("**Bold**, __strong__, *it*, _em_ and ~~gone~~ ##"), "Bold, strong, it, em and gone");
+  assert.equal(title("Refactor `__init__` and `a*b*c` in snake_case_name"), "Refactor __init__ and a*b*c in snake_case_name");
+  assert.equal(title("See [the docs](https://e.x/a_b) and ![chart](p.png) and [ref][1]"), "See the docs and chart and ref");
+  assert.equal(title("Escaped \\*star\\* and a \\_ and <https://e.x/y>"), "Escaped *star* and a _ and https://e.x/y");
+  assert.equal(title("``a ` tick``, a * b * c, x & y, unclosed `tick"), "a ` tick, a * b * c, x & y, unclosed `tick");
+  assert.equal(title("Ünïcode   **ok**"), "Ünïcode ok");
+});
+
 test("rl.ps1: attribution from hc get, and the fallback when it fails", win, () => {
   const s = scratch("rl-win-hc-");
   const env = { READING_LIST_DIR: join(s, "list") };

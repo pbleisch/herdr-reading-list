@@ -127,7 +127,9 @@ An item file:
 - Writes are atomic: the script writes `items/.<id>.<pid>.tmp` and `mv`s it over `items/<id>.json`.
   The mod ignores dotfiles. No file is ever appended to, so there are no torn lines, no 1 MiB log to
   compact, and no lock.
-- `title` defaults to the file name, or the first `# ` heading for markdown.
+- `title` defaults to the file name, or the first `# ` heading for markdown, as plain text:
+  code spans without their backticks, links and images as their text, `**`, `__`, `~~`, `*` and
+  `_` emphasis dropped (an `_` inside a word stays), `\`-escapes as the character.
 - `size` and `mtime` let the pane notice the file changed after the person read it.
 - `done_at` is set by `rl done` (the producer's "the person has handled this"); `add` writes `null`,
   so a re-add brings a done item back. The person's own done marks live in `state.json` (4.3).

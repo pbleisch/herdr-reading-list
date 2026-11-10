@@ -99,6 +99,65 @@ function Json-Str([string]$s) {
 	return $b.ToString()
 }
 
+# A markdown heading's text as a plain title, as the POSIX rl's plain_title: code spans keep
+# their text without the backticks; links and images keep their text; **, __, ~~, * and _
+# around words go (an _ inside a word, as in snake_case, stays); \-escapes keep the
+# character; spaces collapse.
+function Plain-Title([string]$s) {
+	$s = $s.Replace('\`', [string][char]0x17)
+	# Code spans: a run of backticks up to the same run. Set aside, so nothing inside changes.
+	$code = [Collections.Generic.List[string]]::new()
+	$t = [Text.StringBuilder]::new()
+	while (($m = [regex]::Match($s, '`+')).Success) {
+		$tick = $m.Value; $pre = $s.Substring(0, $m.Index); $rest = $s.Substring($m.Index + $m.Length)
+		$j = $rest.IndexOf($tick, [StringComparison]::Ordinal)
+		if ($j -lt 0) { [void]$t.Append($pre + $tick); $s = $rest; continue }
+		$c = $rest.Substring(0, $j)
+		if ($c -cmatch '^ .*[^ ].* $') { $c = $c.Substring(1, $c.Length - 2) }
+		$code.Add($c)
+		[void]$t.Append($pre + [char]1 + $code.Count + [char]2); $s = $rest.Substring($j + $tick.Length)
+	}
+	$s = $t.ToString() + $s
+	$esc = [ordered]@{ '\\' = 0x10; '\*' = 0x11; '\_' = 0x12; '\~' = 0x13; '\[' = 0x14; '\]' = 0x15; '\<' = 0x16 }
+	foreach ($k in $esc.Keys) { $s = $s.Replace($k, [string][char]$esc[$k]) }
+	$s = $s.Replace('\#', '#')
+	# [text](url), [text][ref] and ![alt](url) become their text.
+	$out = [Text.StringBuilder]::new()
+	while (($i = $s.IndexOf('[')) -ge 0) {
+		$rest = $s.Substring($i + 1); $j = $rest.IndexOf(']')
+		if ($j -lt 0) { break }
+		$text = $rest.Substring(0, $j); $after = $rest.Substring($j + 1); $pre = $s.Substring(0, $i)
+		$k = -1
+		if ($after.StartsWith('(')) { $k = $after.IndexOf(')') } elseif ($after.StartsWith('[')) { $k = $after.IndexOf(']') }
+		if ($k -lt 0) { [void]$out.Append($s.Substring(0, $i + 1)); $s = $rest; continue }
+		if ($pre.EndsWith('!')) { $pre = $pre.Substring(0, $pre.Length - 1) }
+		[void]$out.Append($pre + $text); $s = $after.Substring($k + 1)
+	}
+	$s = $out.ToString() + $s
+	$s = [regex]::Replace($s, '<([A-Za-z][A-Za-z0-9.+-]*:[^ <>]*)>', '$1')
+	foreach ($d in '**', '__', '~~', '*', '_') {
+		$e = [regex]::Escape($d); $x = [regex]::Escape($d.Substring(0, 1))
+		$out = [Text.StringBuilder]::new()
+		while (($m = [regex]::Match($s, "$e[^$x]+$e")).Success) {
+			$inner = $m.Value.Substring($d.Length, $m.Length - 2 * $d.Length)
+			$before = if ($m.Index -gt 0) { $s.Substring($m.Index - 1, 1) } else { '' }
+			$after = if ($m.Index + $m.Length -lt $s.Length) { $s.Substring($m.Index + $m.Length, 1) } else { '' }
+			$ok = $inner -notmatch '^[ \t]' -and $inner -notmatch '[ \t]$'
+			if ($d[0] -eq '_' -and ($before -cmatch '[A-Za-z0-9]' -or $after -cmatch '[A-Za-z0-9]')) { $ok = $false }
+			if ($ok) { [void]$out.Append($s.Substring(0, $m.Index) + $inner); $s = $s.Substring($m.Index + $m.Length) }
+			else { [void]$out.Append($s.Substring(0, $m.Index + 1)); $s = $s.Substring($m.Index + 1) }
+		}
+		$s = $out.ToString() + $s
+	}
+	for ($n = $code.Count; $n -ge 1; $n--) {
+		$p = [string][char]1 + $n + [char]2; $i = $s.IndexOf($p, [StringComparison]::Ordinal)
+		if ($i -ge 0) { $s = $s.Substring(0, $i) + $code[$n - 1] + $s.Substring($i + $p.Length) }
+	}
+	foreach ($k in $esc.Keys) { $s = $s.Replace([string][char]$esc[$k], $k.Substring(1)) }
+	$s = $s.Replace([string][char]0x17, '`')
+	return ($s -replace '[ \t]+', ' ').Trim(' ')
+}
+
 function Sha256-16([string]$s) {
 	$h = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($s))
 	return ([Convert]::ToHexString($h).ToLowerInvariant()).Substring(0, 16)
@@ -376,6 +435,7 @@ function Cmd-Add([string[]]$a) {
 					Where-Object { $_ -cmatch '^# ' } | Select-Object -First 1
 				if ($heading) {
 					$h = ($heading -replace "`r", '') -replace '^# *', '' -replace ' *#* *$', ''
+					if ($h) { $h = Plain-Title $h }
 					if ($h) { $defaultTitle = $h }
 				}
 			}

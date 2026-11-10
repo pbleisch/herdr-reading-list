@@ -65,7 +65,7 @@ Who added the item:
 
 Other options and details:
 
-- `--title` overrides the title (default: the file name, or a markdown file's first `# ` heading).
+- `--title` overrides the title (default: the file name, or a markdown file's first `# ` heading as plain text, its inline markdown dropped).
 - Paths may be relative; `rl` stores the real absolute path. The file or folder must exist. URLs
   must start with `http://` or `https://`.
 - `--if-new` adds only if the path or URL is not on the list yet, and otherwise leaves its item as

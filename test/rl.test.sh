@@ -55,6 +55,23 @@ eq "$(q "$f" '/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(o.added_at) && /Z$/.test(
 eq "$(q "$f" o.by.from)" "$(id -un)@$(ps -o comm= -p $$ | sed 's/^-//; s|.*/||')" "from outside hc: user@parent"
 eq "$(find "$READING_LIST_DIR/items" -name '.*' | wc -l | tr -d ' ')" 0 "no temp files left"
 
+# The title from a heading drops its inline markdown, as the preview renders it.
+mkdir -p "$scratch/titles"
+title_of() {
+	printf '# %s\n\nbody\n' "$1" >"$scratch/titles/t.md"
+	tid=$("$RL" add "$scratch/titles/t.md" --kind fyi)
+	q "$READING_LIST_DIR/items/$tid.json" o.title
+}
+eq "$(title_of 'Review: forecast cache layer (branch `cache-layer`)')" "Review: forecast cache layer (branch cache-layer)" "title drops backticks"
+eq "$(title_of '**Bold**, __strong__, *it*, _em_ and ~~gone~~ ##')" "Bold, strong, it, em and gone" "title drops emphasis and closing hashes"
+eq "$(title_of 'Refactor `__init__` and `a*b*c` in snake_case_name')" "Refactor __init__ and a*b*c in snake_case_name" "code spans and words keep their _ and *"
+eq "$(title_of 'See [the docs](https://e.x/a_b) and ![chart](p.png) and [ref][1]')" "See the docs and chart and ref" "links and images keep their text"
+eq "$(title_of 'Escaped \*star\* and a \_ and <https://e.x/y>')" "Escaped *star* and a _ and https://e.x/y" "escapes keep the character, autolinks the URL"
+eq "$(title_of '``a ` tick``, a * b * c, x & y, unclosed `tick')" "a \` tick, a * b * c, x & y, unclosed \`tick" "double backticks, lone stars, & and an unclosed backtick"
+eq "$(title_of 'Ünïcode   **ok**')" "Ünïcode ok" "UTF-8 and spaces"
+"$RL" rm "$scratch/titles/t.md" >/dev/null
+rm -f -- "$scratch/titles/t.md"
+
 # re-add: replaces the note, counts adds.
 id2=$("$RL" add "$scratch/docs/sub dir/plan.md" --kind fyi --title "Plan v2" --from "ci job")
 eq "$id2" "$id" "same path, same id"
