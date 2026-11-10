@@ -999,15 +999,19 @@ export default class ReadingList extends View {
     });
   }
 
-  // Space: a preview window from a handler, a toggle like Finder's: the macOS Quick Look
-  // panel, GNOME Sushi on Linux, the QuickLook app or PowerToys Peek on Windows, or what the
-  // person's handler shows. Without one (none installed, a handler that passes) the in-pane
-  // preview instead. Never marks read and never
-  // runs anything (both only draw a preview).
+  // Space: an HTML item goes to the local browser viewer after the person's handler has
+  // had its chance. Other types use the platform handler. The native pane is the fallback.
+  // None of these mark the item read or change Enter's reveal rule.
   async preview(item, cx) {
     const list = await this.handlers();
-    if (!list.some((h) => !(h.who === "builtin" && this.noLook))) return this.previewHere(item, cx);
     const key = itemKey(item);
+    const html = item.path && typeOf(item) === "html";
+    if (this.browserPreview) {
+      const same = this.browserPreview === key;
+      this.browserPreview = null;
+      await this.browserViewer("close").catch(() => {});
+      if (same) return;
+    }
     // The preview window open now: Space again on its item closes it (and shows it again
     // when there was nothing to close); on another item, its handler is told first.
     const open = this.quicklook;
@@ -1017,6 +1021,33 @@ export default class ReadingList extends View {
       const r = await this.runAction("preview-close", open.path, { only: open.who, list, extra: () => [open.token, same ? "same" : "other"] }, cx);
       if (same && r.status === "ok") return;
     }
+    if (html) {
+      let path = item.path;
+      if (item.machine) {
+        const copy = await this.copyFor(item, "Space");
+        if (!copy) return;
+        path = copy.path;
+      } else {
+        const st = await this.helper("stat", [path]).catch(() => null);
+        if (st?.stdout.trim() !== "f" && st?.stdout.trim() !== "x") {
+          notify({ title: "Reading list", body: `${item.title} is gone: ${path}`, level: "warning" });
+          return;
+        }
+      }
+      const user = await this.runAction("preview", path, { list, only: "user" }, cx);
+      if (user.status === "ok") {
+        this.quicklook = { id: key, path, who: "user", token: token(user.stdout) };
+        return;
+      }
+      if (user.status === "failed") {
+        notify({ title: "Reading list", body: `Couldn't preview ${item.title}: ${user.message}`, level: "error" });
+        return;
+      }
+      const opened = await this.browserViewer("open", path).catch((e) => ({ code: null, stderr: String(e?.message ?? e) }));
+      if (opened?.code === 0) { this.browserPreview = key; return; }
+      return this.previewHere(item, cx, "The HTML viewer could not open; the preview is shown in the pane.");
+    }
+    if (!list.some((h) => !(h.who === "builtin" && this.noLook))) return this.previewHere(item, cx);
     if (!item.path) {
       notify({ title: "Reading list", body: this.platform === "macos" ? "Quick Look has no preview for a link; Enter opens it." : "A link has no preview window; Enter opens it.", level: "info" });
       return;
@@ -1043,12 +1074,18 @@ export default class ReadingList extends View {
     this.quicklook = { id: key, path, who: r.who, token: token(r.stdout) };
   }
 
+  browserViewer(action, path) {
+    const script = joinPath(appHome(), MOD, "viewer", "host.mjs");
+    const session = joinPath(appHome(), "readlist", "viewer");
+    return exec("node", [script, action, session, ...(path ? [path] : [])], { timeout: TIMEOUT_MS });
+  }
+
   // Space without a preview window: shows or hides the in-pane preview (as `p` does), or in
   // the narrow rail opens the viewer pane (as `v`). The first time, a toast says why.
-  previewHere(item, cx) {
+  previewHere(item, cx, reason = null) {
     if (!this.lookHinted) {
       this.lookHinted = true;
-      notify({ title: "Reading list", body: noQuickLook(this.noLook?.reason), level: "info", timeout: 6000 });
+      notify({ title: "Reading list", body: reason ?? noQuickLook(this.noLook?.reason), level: "info", timeout: 6000 });
     }
     if (this.rail()) return this.toggleViewer({ item }, cx);
     this.choice = !previewShown(this.width, this.choice);
