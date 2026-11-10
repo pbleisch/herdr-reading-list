@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeItem, STATS_SCRIPT, parseStats } from "../mods/readlist/core/items.js";
 import { parseState, serializeState, applyAction, isChanged, prune, withInbox, rowsFor } from "../mods/readlist/core/state.js";
-import { NO_FILTER, applyFilters, filterRows, isFiltered, textMatches, options, labelFor, keyOf } from "../mods/readlist/core/filters.js";
+import { NO_FILTER, applyFilters, filterRows, isFiltered, textMatches, options, labelFor, keyOf, MENU, menuHeight, menuAnchor } from "../mods/readlist/core/filters.js";
 import { arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction, CLAIM_MS, CLAIM_MAX, QUIET_MS } from "../mods/readlist/core/arrival.js";
 import { INBOX_SCRIPT, ADD_SCRIPT, parseInbox, inboxPlan, SETTLE_S } from "../mods/readlist/core/inbox.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "../mods/readlist/core/viewer.js";
@@ -348,4 +348,18 @@ test("the repo's keys.json binds cmd-shift-i on macOS and ctrl-shift-i on Linux 
   assert.deepEqual(keys, { global: { "cmd-shift-i": "mod.open:readlist", "ctrl-shift-i": "mod.open:readlist" } });
   assert.deepEqual(forPlatform(keys, "darwin"), { global: { "cmd-shift-i": "mod.open:readlist" } });
   assert.deepEqual(forPlatform(keys, "linux"), { global: { "ctrl-shift-i": "mod.open:readlist" } });
+});
+
+test("the f menu: tall enough for every row up to its cap, then it scrolls", () => {
+  const sec = (n) => ({ options: Array.from({ length: n }, (_, i) => ({ value: i })) });
+  assert.equal(menuHeight([sec(2)]), 12 + MENU.head + 2 * MENU.row);
+  assert.equal(menuHeight([sec(3), sec(5), sec(5), sec(2), sec(1), sec(2)]), MENU.max, "three spaces, five agents, five types and the rest");
+});
+
+test("the f menu from the keyboard opens under the header's right end, in window pixels", () => {
+  assert.deepEqual(menuAnchor({ x: 300, y: 80 }, 900, 1), { x: 300 + 900 - 16 - MENU.width, y: 80 + 41 });
+  assert.deepEqual(menuAnchor({ x: 300, y: 80 }, 900, 1.5), { x: 300 + (900 - 16 - MENU.width) * 1.5, y: 80 + 41 * 1.5 }, "logical sizes scale with the zoom");
+  assert.deepEqual(menuAnchor({ x: 10, y: 600 }, 200, 1), { x: 10, y: 641 }, "a copy narrower than the menu: at its left edge");
+  assert.equal(menuAnchor(null, 900, 1), null, "not known before a pointer event over the copy");
+  assert.equal(menuAnchor({ x: 0, y: 0 }, undefined, 1), null, "nor before its size is");
 });

@@ -95,7 +95,10 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   (title, note, path; Enter or Down back to the list, Esc clears); `f` opens the filter menu (a
   250-wide popup with sections Space, Agent, Type and Show (All items / Unread only), each option with its count, a check on the chosen one, and in the list view a last section "Also add" with
   one entry, "Files Claude Code sends", checked while that source is on, then "Actions" with "Built-in"
-  and "Your handler", the one in use checked; `j`/`k`, Enter); Shift-R lists
+  and "Your handler", the one in use checked; `j`/`k`, Enter; at most 440 high, then it scrolls
+  and `j`/`k` keep the choice and its section's title on screen; a click on a chip opens it at
+  the pointer, `f` under the header's right end, or in the middle of the window until the
+  pointer has been over that copy); Shift-R lists
   this machine and every other one again now. Each is also a command,
   `readlist.<down|up|top|bottom|open|preview|pane|reveal|copy|read|done|undo|delete|view|find|filter|viewer|focus|install-rl|refresh|claude-files|handler>`,
   which only the copy that had the keyboard last acts on (else the sidebar's).

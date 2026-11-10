@@ -77,3 +77,23 @@ export function labelFor(dim, value, spaces = []) {
   if (value === "f:") return "Unknown";
   return value.slice(2);
 }
+
+// The `f` menu: its width, its row heights and the most it grows to before it scrolls.
+export const MENU = Object.freeze({ width: 250, row: 29, head: 25, pad: 5, max: 440 });
+
+// The menu's height for `sections` (each { options }): every row and head, at most MENU.max.
+export function menuHeight(sections) {
+  const rows = sections.reduce((n, s) => n + s.options.length, 0);
+  return Math.min(MENU.max, 2 * MENU.pad + 2 + sections.length * MENU.head + rows * MENU.row);
+}
+
+// Where the menu opens from the keyboard (`f`, readlist.filter): its top left under the
+// header, its right edge at the header's right padding, in window pixels as pointer events
+// give them. `place` is the copy's own top left there (a pointer event's position less its
+// local position), `width` the copy's width in logical pixels, `zoom` the person's zoom.
+// Null when the copy does not know where it is.
+export function menuAnchor(place, width, zoom, header = 41, pad = 16) {
+  if (!place || !Number.isFinite(place.x) || !Number.isFinite(place.y) || !(width > 0)) return null;
+  const z = zoom > 0 ? zoom : 1;
+  return { x: place.x + Math.max(0, width - pad - MENU.width) * z, y: place.y + header * z };
+}

@@ -26,7 +26,7 @@ import { helperCall, rlFile, rlSource } from "./core/helpers.js";
 import { joinPath } from "./core/paths.js";
 import { noPwsh, NEEDS_PWSH } from "./core/windows.js";
 import { parseState, serializeState, applyAction, prune, rowsFor, counts, ago, who, isRead, isDone, isChanged, withInbox } from "./core/state.js";
-import { NO_FILTER, applyFilters, filterRows, isFiltered, options, labelFor } from "./core/filters.js";
+import { NO_FILTER, applyFilters, filterRows, isFiltered, options, labelFor, MENU, menuHeight, menuAnchor } from "./core/filters.js";
 import { BURST_MS, arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction } from "./core/arrival.js";
 import { parseInbox, inboxPlan } from "./core/inbox.js";
 import { isClaudeAgent, foregroundPid, parseScan, sentPlan, sentOn, setSent, sentAddArgs } from "./core/sent.js";
@@ -79,7 +79,6 @@ const DOUBLE_MS = 500;
 
 const MENU_TITLE = { space: "Space", agent: "Agent", type: "Type", unread: "Show", sources: "Also add", actions: "Actions" };
 const ALL = { space: "All spaces", agent: "All agents", type: "All types" };
-const MENU_ROW = 29, MENU_HEAD = 25;
 
 const rowsHeight = (rows) => rows.length * SEARCH_LINE + 2 * ROWS_PAD;
 
@@ -107,6 +106,10 @@ export default class ReadingList extends View {
     this.platform = platformOf(appWindow());
     if (props()?.menu) {
       this.at = Math.max(0, this.menuRows().filter((r) => !r.head).findIndex((r) => r.on));
+      // The menu scrolls when it is taller than MENU.max: moving the highlight keeps it on
+      // screen, so the last sections are reachable from the keyboard.
+      this.menuScroll = VirtualListScrollHandle.new();
+      this.showAt();
       this.handle.focus();
       cx.timer.after(300, () => this.handle.focus());
       // While it is open the menu takes the reading list's commands (j, k, Enter bound in
@@ -1260,8 +1263,10 @@ export default class ReadingList extends View {
     return filterRows(rows, this.f.unread && this.view === "list");
   }
 
-  // Opens a filter menu (a popup of this mod with props {menu}) for `dims`.
-  openMenu(dims) {
+  // Opens a filter menu (a popup of this mod with props {menu}) for `dims`: at the pointer
+  // after a click on a chip, under the header from the keyboard (or, before this copy knows
+  // where it is on screen, in the middle of the window).
+  openMenu(dims, keyboard = false) {
     const pool = this.pool();
     const ctx = { fs: this.fs, spaces: spaces(), agents: agents() };
     const sections = dims.map((dim) => dim === "unread"
@@ -1271,9 +1276,13 @@ export default class ReadingList extends View {
       : dim === "actions"
         ? { dim, title: MENU_TITLE.actions, value: this.hs.state === "on", options: [{ value: false, label: "Built-in" }, { value: true, label: "Your handler" }] }
         : { dim, title: MENU_TITLE[dim], value: this.f[dim], options: [{ value: null, label: ALL[dim] }, ...options(pool, dim, { ...ctx, chosen: this.f[dim] })] });
-    const rows = sections.reduce((n, s) => n + s.options.length, 0);
-    const height = Math.min(440, 12 + sections.length * MENU_HEAD + rows * MENU_ROW);
-    openOverlay({ mod: NAME, kind: "popup", width: 250, height, props: { menu: sections, target: this.copy } });
+    const spec = { mod: NAME, kind: "popup", width: MENU.width, height: menuHeight(sections), props: { menu: sections, target: this.copy } };
+    if (keyboard) {
+      const at = menuAnchor(this.place, this.width, settings().zoom ?? 1);
+      if (at) spec.at = at;
+      else spec.kind = "dialog";
+    }
+    openOverlay(spec);
   }
 
   // A pick from a filter menu this copy opened.
@@ -1362,7 +1371,7 @@ export default class ReadingList extends View {
         break;
       case "filter":
         if (this.rail()) return false;
-        this.openMenu(["space", "agent", "type", ...(this.view === "list" ? ["unread", "sources", "actions"] : [])]);
+        this.openMenu(["space", "agent", "type", ...(this.view === "list" ? ["unread", "sources", "actions"] : [])], true);
         break;
       case "viewer": this.toggleViewer(cur, cx); break;
       case "focus": this.focus(); break;
@@ -1416,12 +1425,21 @@ export default class ReadingList extends View {
   menuKey(k) {
     const choices = this.menuRows().filter((r) => !r.head);
     const at = Math.min(this.at ?? 0, choices.length - 1);
-    if (k === "down" || k === "j") this.at = (at + 1) % choices.length;
-    else if (k === "up" || k === "k") this.at = (at + choices.length - 1) % choices.length;
+    if (k === "down" || k === "j") this.showAt((at + 1) % choices.length);
+    else if (k === "up" || k === "k") this.showAt((at + choices.length - 1) % choices.length);
     else if (k === "enter" || k === "space" || k === "open" || k === "preview") this.pick(choices[at]);
     else if (k === "escape") closeOverlay(props().overlay);
     else return false;
     return true;
+  }
+
+  // Highlights choice `at` (else the current one) and scrolls it on screen, with its
+  // section's title when it is the section's first choice.
+  showAt(at = this.at) {
+    this.at = at;
+    const rows = this.menuRows();
+    const n = rows.indexOf(rows.filter((r) => !r.head)[at]);
+    if (n >= 0) this.menuScroll?.scroll_to_item(rows[n - 1]?.head ? n - 1 : n);
   }
 
   pick(r) {
@@ -1434,24 +1452,34 @@ export default class ReadingList extends View {
     const rows = this.menuRows();
     const choices = rows.filter((r) => !r.head);
     const at = Math.min(this.at ?? 0, choices.length - 1);
-    return v_flex().id("rl-menu").track_focus(this.handle).size_full().p(5).bg(t.popover).text_size(12.8).overflow_y_scrollbar()
+    const row = (r, n) => {
+      if (r.head) return div().h(MENU.head).flex_none().px(8).pt(7).text_size(11).text_color(t.dim).child(r.title);
+      const i = choices.indexOf(r);
+      return h_flex().id(`rl-menu-${n}`).h(MENU.row).flex_none().px(8).gap(9).rounded(7).items_center().cursor_pointer()
+        .text_color(t.foreground)
+        .when(i === at, (el) => el.bg(t.hover))
+        .hover((el) => el.bg(t.hover))
+        .child(div().flex_1().min_w(0).truncate().child(r.label))
+        .when(typeof r.count === "number", (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(String(r.count))))
+        .child(div().w(14).flex_none().when(r.on, (el) => el.child(svg(`${ICONS}/check.svg`).size(14).text_color(t.foreground))));
+    };
+    return v_flex().id("rl-menu").track_focus(this.handle).relative().size_full().p(MENU.pad).bg(t.popover).text_size(12.8)
       .on_key_down((e, cx) => {
         if (!this.menuKey(e.keystroke)) return;
         cx.stop_propagation();
         cx.notify();
       })
-      .children(rows.map((r, n) => {
-        if (r.head) return div().h(MENU_HEAD).flex_none().px(8).pt(7).text_size(11).text_color(t.dim).child(r.title);
-        const i = choices.indexOf(r);
-        return h_flex().id(`rl-menu-${n}`).h(MENU_ROW).flex_none().px(8).gap(9).rounded(7).items_center().cursor_pointer()
-          .text_color(t.foreground)
-          .when(i === at, (el) => el.bg(t.hover))
-          .hover((el) => el.bg(t.hover))
-          .on_click(() => this.pick(r))
-          .child(div().flex_1().min_w(0).truncate().child(r.label))
-          .when(typeof r.count === "number", (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(String(r.count))))
-          .child(div().w(14).flex_none().when(r.on, (el) => el.child(svg(`${ICONS}/check.svg`).size(14).text_color(t.foreground))));
-      }));
+      .child(v_flex().relative().flex_1().min_h(0)
+        .child(v_virtual_list("rl-menu-rows", rows.length, rows.map((r) => (r.head ? MENU.head : MENU.row)),
+          (n) => `${rows[n].head ? "head" : "row"}-${n}`,
+          (range) => rows.slice(range.start, range.end).map((r, i) => row(r, range.start + i)))
+          .track_scroll(this.menuScroll)
+          .size_full()
+          .on_item_click((key) => {
+            const r = rows[Number(key.split("-")[1])];
+            if (r && !r.head) this.pick(r);
+          }))
+        .child(Scrollbar.vertical("rl-menu-rows").absolute().inset_0()));
   }
 
   // ---- the preview (beside or below the list, or the whole viewer pane) ----
@@ -1529,10 +1557,19 @@ export default class ReadingList extends View {
       .child(this.previewBody(item, how, t));
   }
 
+  // Where this copy's top left is in the window, from a pointer event over it: the filter
+  // menu opens under the header from there when `f` opens it.
+  notePlace(e) {
+    if (!e?.position || !e.local_position) return;
+    this.place = { x: e.position.x - e.local_position.x, y: e.position.y - e.local_position.y };
+  }
+
   sized(el) {
     return el.on_size_change((size, cx) => {
       this.width = size.width / (settings().zoom ?? 1);
       this.height = size.height / (settings().zoom ?? 1);
+      // A new size may come with a new place: learned again from the next pointer event.
+      this.place = null;
       cx.notify();
     });
   }
@@ -2088,8 +2125,10 @@ export default class ReadingList extends View {
       .text_size(13))
       .on_mouse_down("left", (e) => {
         this.press = { count: e.click_count, at: Date.now() };
+        this.notePlace(e);
         if (!this.typing) this.focus();
       })
+      .on_mouse_move((e) => this.notePlace(e))
       .on_key_down((e, cx) => this.keys(e, cx))
       .on_drop((e, cx) => this.dropped(e.paths, cx))
       .child(header)
