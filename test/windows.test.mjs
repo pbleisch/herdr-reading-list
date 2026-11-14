@@ -17,7 +17,8 @@ import { PWSH, PWSH_ARGS, noPwsh } from "../mods/readlist/core/windows.js";
 import { chain, actionArgs, runChain, parseTrust, parseCheck, outcome, REFUSED, NOT_HANDLED, THUMB_SECONDS } from "../mods/readlist/core/handlers.js";
 import { normalizeItem, itemFile, openAction, typeOf, parseListing, parseStats, STATS_SCRIPT, LIST_SCRIPT } from "../mods/readlist/core/items.js";
 import { WINDOWS_RUNS, words } from "../mods/readlist/core/platform.js";
-import { parseStat, parseFolder, previewText, CACHE_SCRIPT, TEXT_BYTES, FOLDER_ENTRIES } from "../mods/readlist/core/preview.js";
+import { parseStat, previewText, CACHE_SCRIPT, TEXT_BYTES } from "../mods/readlist/core/preview.js";
+import { parseFolder, FOLDER_ENTRIES } from "../mods/readlist/core/folder.js";
 import { parseInbox } from "../mods/readlist/core/inbox.js";
 import { parseRlStatus, rlBanner, installToast, MARK } from "../mods/readlist/core/install.js";
 import { parseSendLine, parseScan, LINE_MAX } from "../mods/readlist/core/sent.js";
@@ -73,7 +74,7 @@ test("helperCall: Windows runs readlist.ps1 with pwsh -File, every argument its 
   assert.deepEqual(call("dir", []), { command: "pwsh", args: [...pre, "dir"] });
   assert.deepEqual(call("stats", ["C:\\a b.md", "$(x)"]).args.slice(pre.length), ["stats", "C:\\a b.md", "$(x)"]);
   assert.deepEqual(call("head", ["C:\\a"]).args.slice(pre.length), ["head", "C:\\a", String(TEXT_BYTES)]);
-  assert.deepEqual(call("listdir", ["C:\\a"]).args.slice(pre.length), ["listdir", "C:\\a", String(FOLDER_ENTRIES)]);
+  assert.deepEqual(call("listdir", ["C:\\a", "0"]).args.slice(pre.length), ["listdir", "C:\\a", "0", String(FOLDER_ENTRIES)]);
   assert.deepEqual(call("scan", ["", "t1", "42", ""]).args.slice(pre.length), ["scan", "", String(LINE_MAX), "t1", "42", ""]);
   assert.deepEqual(call("chunks", ["m", "/r", "C:\\o", "1", "2", "C:\\meta", ""]).args.slice(-1), [String(CHUNK_MIB)]);
   assert.deepEqual(call("cache", ["s", "d", "o", "i", "copy"]).args.slice(pre.length), ["cache", "s", "d", "o", "i", "copy"]);
@@ -244,6 +245,47 @@ test("rl.ps1: the title from a heading drops its inline markdown, as the POSIX r
   assert.equal(title("Ünïcode   **ok**"), "Ünïcode ok");
 });
 
+test("rl.ps1: preview keeps paths as one JSON argument and never writes list state", win, () => {
+  const s = scratch("rl-win-preview-");
+  const file = join(s, "résumé 'draft' file.pdf");
+  const argsFile = join(s, "args.json");
+  const list = join(s, "list");
+  writeFileSync(file, "%PDF-1.7\n");
+  mkdirSync(list);
+  writeFileSync(join(list, "state.json"), '{"v":1,"items":{}}\n');
+  const env = { RL_SCRIPT: RL, RL_PREVIEW_FILE: file, RL_PREVIEW_ARGS: argsFile, READING_LIST_DIR: list };
+  const invoke = (command, extra = {}) => spawnSync("pwsh", ["-NoProfile", "-Command", command],
+    { encoding: "utf8", env: { ...baseEnv(), ...env, ...extra } });
+  const pane = invoke('function herdr-app { [IO.File]::WriteAllText($env:RL_PREVIEW_ARGS, (ConvertTo-Json -Compress -InputObject @($args))); $global:LASTEXITCODE=0 }; & $env:RL_SCRIPT preview -- $env:RL_PREVIEW_FILE');
+  assert.equal(pane.status, 0, pane.stderr);
+  const argv = json(argsFile);
+  assert.deepEqual(argv.slice(0, 2), ["do", "pane.split"]);
+  assert.deepEqual(JSON.parse(argv[2]), { direction: "right", mod: "readlist", props: { role: "preview", file } });
+  const folder = ps(RL, ["preview", "--", s], env);
+  assert.equal(folder.status, 1);
+  assert.match(folder.stderr, /folders are browsed in the reading list/);
+  assert.equal(ps(RL, ["preview", "--browser", "--", s], env).status, 1);
+  assert.equal(readFileSync(join(list, "state.json"), "utf8"), '{"v":1,"items":{}}\n');
+  assert.equal(existsSync(join(list, "items")), false);
+
+  const appDir = join(s, "app");
+  mkdirSync(join(appDir, "mods/readlist/viewer"), { recursive: true });
+  writeFileSync(join(appDir, "mods/readlist/viewer/host.mjs"), "");
+  const browser = invoke('function node { [IO.File]::WriteAllText($env:RL_PREVIEW_ARGS, (ConvertTo-Json -Compress -InputObject @($args))); $global:LASTEXITCODE=0 }; & $env:RL_SCRIPT preview --browser -- $env:RL_PREVIEW_FILE',
+    { HERDR_APP_HOME: appDir });
+  assert.equal(browser.status, 0, browser.stderr);
+  assert.deepEqual(json(argsFile), [join(appDir, "mods/readlist/viewer/host.mjs"), "open", join(appDir, "readlist/viewer"), file]);
+  const refused = ps(RL, ["preview", "--", "https://example.test/a.pdf"], env);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /local files only/);
+  assert.equal(ps(RL, ["preview", "--on", "other", "--", file], env).status, 1);
+  assert.equal(ps(RL, ["preview", "--", "other:report.pdf"], env).status, 1);
+  assert.equal(ps(RL, ["preview", "--", join(s, "missing.pdf")], env).status, 1);
+  assert.equal(ps(RL, ["preview", "--"], env).status, 2);
+  const noWindow = invoke('function herdr-app { $global:LASTEXITCODE=1 }; & $env:RL_SCRIPT preview -- $env:RL_PREVIEW_FILE');
+  assert.equal(noWindow.status, 1);
+});
+
 test("rl.ps1: attribution from hc get, and the fallback when it fails", win, () => {
   const s = scratch("rl-win-hc-");
   const env = { READING_LIST_DIR: join(s, "list") };
@@ -361,9 +403,9 @@ test("readlist.ps1: the list folder, listing, stats, head, folders and the inbox
   assert.equal(previewText(head.stdout, 3), null, "binary is refused");
   mkdirSync(join(s, "sub"));
   writeFileSync(join(s, ".hidden"), "");
-  const folder = parseFolder(h("listdir", s, "200").stdout);
+  const folder = parseFolder(h("listdir", s, "1", "200").stdout);
   assert.deepEqual(folder.entries.find((e) => e.name === "sub"), { name: "sub", dir: true });
-  assert.ok(folder.entries.some((e) => e.name === ".hidden"), "the preview lists hidden entries, as ls -A");
+  assert.ok(folder.entries.some((e) => e.name === ".hidden"), "the list includes hidden entries when requested");
   writeFileSync(join(dir, "inbox", "shot.png"), "png");
   writeFileSync(join(dir, "inbox", ".partial"), "");
   writeFileSync(join(dir, "inbox", "desktop.ini"), "");

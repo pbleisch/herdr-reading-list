@@ -5,6 +5,7 @@
 #   rl ls [--unread | --done | --all] [--json]
 #   rl done <path|url|id>
 #   rl rm <path|url|id>
+#   rl preview [--pane|--browser] -- PATH
 #
 # Each item is one JSON file, items/<id>.json, under $READING_LIST_DIR
 # (default ~/.local/state/reading-list). See docs/design.md, section 3.
@@ -19,6 +20,7 @@ usage:
   rl ls [--unread | --done | --all] [--json]
   rl done <path|url|id>
   rl rm <path|url|id>
+  rl preview [--pane|--browser] -- PATH
 
 Adding a path or URL that is already on the list replaces its item (unread again, at the
 top); with --if-new it leaves that item as it is and only prints its id.
@@ -30,6 +32,11 @@ EOF
 die() {
 	printf 'rl: %s\n' "$*" >&2
 	exit 1
+}
+
+usage_error() {
+	printf 'rl: %s\n' "$*" >&2
+	exit 2
 }
 
 DIR=${READING_LIST_DIR:-${HOME:?}/.local/state/reading-list}
@@ -212,6 +219,55 @@ abspath() {
 		[ "$_r" = / ] && _r=''
 		printf '%s/%s\n' "$_r" "$_b"
 	fi
+}
+
+# Resolve the leaf link too: a preview must refer to the actual local file.
+preview_file() {
+	_pf=$(abspath "$1") || return 1
+	_hops=0
+	while [ -L "$_pf" ]; do
+		_hops=$((_hops + 1))
+		[ "$_hops" -le 40 ] || return 1
+		_link=$(readlink "$_pf") || return 1
+		case $_link in
+		/*) _pf=$_link ;;
+		*) _pf=$(dirname "$_pf")/$_link ;;
+		esac
+		_pf=$(abspath "$_pf") || return 1
+	done
+	[ -f "$_pf" ] || return 1
+	printf '%s\n' "$_pf"
+}
+
+cmd_preview() {
+	mode=pane
+	case ${1-} in
+	--pane) shift ;;
+	--browser) mode=browser; shift ;;
+	esac
+	case ${1-} in
+	--on | --on=*) die 'remote machine previews are not supported; use a local file' ;;
+	esac
+	[ "${1-}" = -- ] || usage_error 'preview needs -- FILE'
+	shift
+	[ "$#" -eq 1 ] && [ -n "$1" ] || usage_error 'preview takes exactly one path after --'
+	case $1 in
+	*:*) die 'preview accepts local files only; URLs and remote machines are not supported' ;;
+	esac
+	[ -e "$1" ] || die "no such local file or folder: $1"
+	[ ! -d "$1" ] || die 'folders are browsed in the reading list; add the folder with rl add and press Enter on it'
+	file=$(preview_file "$1") || die "cannot resolve local file: $1"
+	if [ "$mode" = browser ]; then
+		app_dir=${HERDR_APP_HOME:-${HOME:?}/.config/herdr-app}
+		host=$app_dir/mods/readlist/viewer/host.mjs
+		[ -f "$host" ] || die 'browser viewer is not installed in Herdr'
+		command -v node >/dev/null 2>&1 || die 'browser viewer needs Node.js'
+		node "$host" open "$app_dir/readlist/viewer" "$file" || die 'browser viewer could not open the file'
+		return
+	fi
+	command -v herdr-app >/dev/null 2>&1 || die 'preview pane needs herdr-app on PATH'
+	props=$(printf '{"direction":"right","mod":"readlist","props":{"role":"preview","file":%s}}' "$(json_str "$file")")
+	herdr-app do pane.split "$props" || die 'preview pane needs a running Herdr window'
 }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -496,6 +552,7 @@ add) cmd_add "$@" ;;
 ls | list) cmd_ls "$@" ;;
 done) cmd_done "$@" ;;
 rm | remove) cmd_rm "$@" ;;
+preview) cmd_preview "$@" ;;
 -h | --help | help) usage ;;
 *)
 	usage >&2

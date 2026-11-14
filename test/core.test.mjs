@@ -63,6 +63,13 @@ test("typeOf picks the icon from the extension and the file kind", () => {
   assert.equal(typeOf(norm({ path: null, url: "https://x.dev" })), "url");
 });
 
+test("code names and extensions get a code icon, tabular data stays text", () => {
+  for (const name of ["Dockerfile", "Containerfile", "Makefile", "GNUmakefile", "build.mk", ".env", ".env.local", "app.diff", "app.proto", "app.graphql", "app.cs", "app.php", "app.r", "app.tf", "app.nix", "app.vue", "app.kts", "build.gradle", "app.ps1", "app.bat", "app.fish", "app.el", "app.exs", "app.erl", "app.hs", "app.ml", "app.scala", "app.dart", "app.jl", "app.pl", "app.m"]) {
+    assert.equal(typeOf(norm({ path: `/a/${name}` })), "code", name);
+  }
+  for (const name of ["data.csv", "data.tsv"]) assert.equal(typeOf(norm({ path: `/a/${name}` })), "text", name);
+});
+
 test("openAction never opens what could run", () => {
   assert.deepEqual(openAction(norm(), "f"), { how: "open", target: "/tmp/plan.md" });
   assert.equal(openAction(norm(), "x").how, "reveal");

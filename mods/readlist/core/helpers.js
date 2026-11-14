@@ -5,7 +5,8 @@
 // either way; none is ever read as code. Pure functions, shared by the mod and the node tests.
 
 import { LIST_SCRIPT, STAT_SCRIPT, STATS_SCRIPT } from "./items.js";
-import { STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, TEXT_BYTES, FOLDER_ENTRIES } from "./preview.js";
+import { STAT1_SCRIPT, HEAD_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT, TEXT_BYTES } from "./preview.js";
+import { LIST_DIR_SCRIPT, SAFE_PATH_SCRIPT, FOLDER_ENTRIES } from "./folder.js";
 import { INBOX_SCRIPT, ADD_SCRIPT } from "./inbox.js";
 import { SCAN_SCRIPT, SENT_ADD_SCRIPT, LINE_MAX } from "./sent.js";
 import { RL_STATUS_SCRIPT, INSTALL_RL_SCRIPT } from "./install.js";
@@ -25,6 +26,7 @@ export const SCRIPTS = {
   stat1: STAT1_SCRIPT,
   head: HEAD_SCRIPT,
   listdir: LIST_DIR_SCRIPT,
+  "safe-path": SAFE_PATH_SCRIPT,
   cache: CACHE_SCRIPT,
   prune: PRUNE_SCRIPT,
   "prune-copies": PRUNE_COPIES_SCRIPT,

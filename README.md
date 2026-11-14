@@ -11,16 +11,36 @@ default app when you press Enter.
 
 | | Open (Enter) | Show in the file manager (`o`) | Space: preview window | Thumbnails in the pane | Popup key |
 |---|---|---|---|---|---|
-| macOS | `open` | Finder (`open -R`) | Quick Look | Quick Look (PDF, ...) | `cmd-shift-i` |
-| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | GNOME Sushi, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
-| Windows | the default app | Explorer (`explorer /select,`) | the QuickLook app or PowerToys Peek, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+| macOS | `open` | Finder (`open -R`) | Built-in browser viewer by default for Markdown, HTML, PDF, video, common images and glTF; Quick Look for other files | Quick Look (PDF, ...) | `cmd-shift-i` |
+| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | Built-in browser viewer by default for Markdown, HTML, PDF, video, common images and glTF; GNOME Sushi for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+| Windows | the default app | Explorer (`explorer /select,`) | Built-in browser viewer by default for Markdown, HTML, PDF, video, common images and glTF; QuickLook or PowerToys Peek for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
 
-macOS has everything. Linux is supported: opening needs `xdg-open` (xdg-utils), showing in the file
+To use your platform's preview window for those supported types too, press `f` in the list and
+choose **Space preview → System preview**. Choose **Built-in viewer** to switch back. The choice
+is stored as `"readlist": {"space_preview": "system"}` in Herdr's live `settings.json`
+(default: `"builtin"`), shared by every Reading list copy. The next Space press uses the new
+choice. Your opted-in handler still gets first chance; unsupported types and the in-pane fallback
+keep their existing behavior. This setting changes Space in the reading list;
+`rl preview --browser` explicitly opens the browser viewer.
+
+The browser viewer needs Node.js 20 or newer and a browser on each platform. It
+bundles its frontend, Marked, PDF.js and Three.js locally and keeps untrusted Markdown, HTML and PDF scripting disabled. Markdown headings, lists, tables, task lists, links, images and code blocks render in a sandboxed document; raw HTML is shown as text. Local links and images are limited to referenced files under the Markdown file's folder, and remote resources are not loaded. PDFs have
+page navigation, zoom, text search and copy; videos use native playback and seeking, with an Open in
+default app option for unsupported codecs. FFmpeg adds a poster frame when it is already installed.
+Local HTML also renders as image tiles in the reading list's preview pane when Chrome, Chromium or
+Edge and a Node.js runtime with WebSocket support are available. Tiles appear as they finish; the
+pane reflows the page when its width or the theme changes. Its wheel and keys scroll the page.
+Click a local HTML link to show that page in the same pane; **Back** or Backspace returns to the
+previous page. Image tiles cannot be selected or searched, so Space from the list still opens the
+browser viewer for selection and search. If tile rendering fails, the pane explains why and shows
+the HTML text preview.
+See the [viewer contract](docs/viewer-contract.md). Without Node or a browser, Space shows the native
+preview in the pane. Linux is supported: opening needs `xdg-open` (xdg-utils), showing in the file
 manager works with any file manager that answers the freedesktop `FileManager1` call (Nautilus,
 Dolphin, Nemo, Caja, Thunar...), and the Space preview window needs GNOME Sushi (the `sushi`
 package). Without Sushi, Space shows or hides the preview in the pane instead and says so once;
 when a program is missing, the list says which one instead of failing quietly. Markdown, text, code,
-images and folders preview in the pane on all three. Items on other machines are listed from macOS,
+images preview in the pane on all three. Folder contents are browsed in the list. Items on other machines are listed from macOS,
 Linux and Windows alike.
 
 Windows is supported with PowerShell 7 (`pwsh`, which Herdr also uses as the default shell there;
@@ -28,12 +48,12 @@ Windows is supported with PowerShell 7 (`pwsh`, which Herdr also uses as the def
 in `mods/readlist/bin/windows` where macOS and Linux run `sh`, `rl` is `rl.ps1` (with `rl.cmd` for
 cmd.exe and other programs, and an `rl` shim for Git Bash), and the list lives in
 `%LOCALAPPDATA%\reading-list`. Space opens the [QuickLook](https://github.com/QL-Win/QuickLook) app
-or PowerToys Peek when either is installed. A Windows machine is not listed from another machine
+or PowerToys Peek for other files when either is installed. A Windows machine is not listed from another machine
 yet (it has no `sh` for the list's scripts there).
 
-Each of these actions is a handler: a small program the list runs with the item. The table is what
-the built-in handlers do (`mods/readlist/handlers/macos.sh`, `linux.sh` and `windows.ps1`); you can
-put your own in front of them, see [Your own handler](#your-own-handler).
+The other file actions go through the built-in handlers (`mods/readlist/handlers/macos.sh`,
+`linux.sh` and `windows.ps1`). The browser viewer runs after your opted-in Space handler has had
+its chance. See [Your own handler](#your-own-handler).
 
 ## Install
 
@@ -54,12 +74,20 @@ Peek if installed, and only if you turn it on, your own handler), reads the file
 wherever they are (and, only if
 you turn on "Files Claude Code sends", Claude Code's session files and transcripts), and writes only
 its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin/rl` (on Windows
-`~\.local\bin\rl.ps1`, `rl.cmd` and `rl`, and that folder on your user PATH). On other
+`~\.local\bin\rl.ps1`, `rl.cmd` and `rl`, and that folder on your user PATH). The built-in viewer
+adds to that, when Node.js is installed: `node` runs the mod's `viewer/` scripts, which start a
+small web server on `127.0.0.1` only (a random port, a random session token on every address) for
+the file you preview and the local files it refers to, open your browser on it (a Chrome, Edge or
+Chromium app window when there is one), run headless Chrome, Chromium or Edge to draw local HTML
+and glTF models for the pane, and run `ffmpeg` for a video's poster frame if it is installed. It
+writes its session file in `~/.config/herdr-app/readlist/viewer/`, the drawn pages and models in
+`~/.config/herdr-app/readlist-tile-cache/` and `readlist-model-cache/`, and, when you choose a
+Space preview in the `f` menu, the `readlist` entry of Herdr's `settings.json`. On other
 machines Herdr reaches, it reads their list folder and the files on it through Herdr every 15 s,
 copies a file into its `.cache/` when you open or preview it, removes an item file on Shift-D, and
 writes `~/.local/bin/rl` there only when you press Install rl on that machine. It uses no network
-of its own beyond Herdr's connections, and `scp` for a file over 5 MiB that `hc exec` could not
-fetch (a URL item opens in your browser).
+of its own beyond Herdr's connections, the viewer's server on `127.0.0.1`, and `scp` for a file
+over 5 MiB that `hc exec` could not fetch (a URL item opens in your browser).
 
 Then open it:
 
@@ -87,6 +115,35 @@ Bash.
 
 Agents without `rl` can still add items by writing a small JSON file; see
 [skill/reading-list/SKILL.md](skill/reading-list/SKILL.md).
+
+### Preview a local file from another mod
+
+`rl preview [--pane|--browser] -- PATH` opens a file without adding it to the list.
+`--pane` is the default. It opens a Reading list preview pane in the running Herdr
+window; a later call updates the same pane. The pane shows the file name, its native
+preview, **Space · Browser** for types supported by the browser viewer, and **Close**.
+`--browser` uses the same local browser viewer host and session as Space on a list
+item. It works without an open Herdr window when the mod's viewer is installed and
+Node.js and a browser are available.
+
+`PATH` may be relative or absolute. The command resolves symlinks and requires an
+existing local file. Folders are refused with a message to add the folder to the reading list and press Enter there.
+URLs and remote machine requests are refused. It makes
+no list item, read-state change, toast or remote copy. Exit status is 0 when the
+handoff succeeds, 1 for an unavailable file, viewer or Herdr window (or a refused
+URL or remote path), and 2 for command syntax. A successful pane handoff means Herdr
+accepted the split; rendering can still report a file or renderer error in the pane.
+
+Other mods should pass arguments separately, with the path after `--`:
+
+```js
+await exec("rl", ["preview", "--", path]);
+```
+
+On Windows, call the installed PowerShell launcher (`rl.ps1`, or `rl.cmd` from
+programs that use cmd.exe) with the same separate arguments. Never build a shell
+command from the path. See [viewer contract](docs/viewer-contract.md) for supported
+browser types and resource limits.
 
 ### Teach your agents
 
@@ -150,8 +207,9 @@ In the list:
 | Key | Does |
 |---|---|
 | click, `j` / `k`, arrows, `g` / `G` | select (selecting never opens anything) |
-| Enter, double-click | open in its app; marks it read |
-| Space | Quick Look panel on macOS, GNOME Sushi on Linux, QuickLook or PowerToys Peek on Windows (again closes it) |
+| Enter, double-click | open in its app; marks it read. On a folder: browse its contents in the list |
+| Right / Left, Backspace, `.` | while browsing a folder: enter the selected subfolder / go up / show or hide hidden entries |
+| Space | the chosen built-in viewer or system preview for Markdown, HTML, PDF, video, common still images and glTF models; Quick Look, GNOME Sushi, QuickLook or PowerToys Peek for other files where available (again closes the preview) |
 | `p` | show or hide the preview in the pane |
 | `v` | a preview pane on the right of the window that follows the selection |
 | `o` | show in Finder (the file manager on Linux, Explorer on Windows) |
@@ -160,11 +218,12 @@ In the list:
 | `d` | done (Tab shows the Done view, where `d` or `u` brings it back) |
 | Shift-D | delete the item from the list (like `rl rm`; the file stays) |
 | `/` | filter by title, note and path |
-| `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch and Actions (built-in or your handler) |
+| `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch, Actions (built-in or your handler) and Space preview (built-in viewer or system preview) |
 | Shift-R | list this machine and every other one again now |
 
 In the `v` pane (click it to give it the keyboard), you can scroll and search the item it shows,
-like `less`:
+like `less`. The scroll keys move markdown, HTML and search results; text and code show in a
+highlighted editor that scrolls with the wheel or the trackpad:
 
 | Key | Does |
 |---|---|
@@ -176,25 +235,58 @@ like `less`:
 | `n` / Shift-N | next / previous match, wrapping at the ends ("wrapped" in the bar) |
 | Esc | close the search |
 | `v` | close the pane |
+| Backspace / Alt-Left | return from a local HTML link opened in the pane |
+
+The browser viewer fits still images by default. Use **Actual size**, the zoom buttons, the wheel
+or a pinch to zoom; drag to pan; **Rotate** or `R` to turn the image. `F` fits it again, `1`
+shows actual size, and the arrow keys pan. SVG is shown as an inert image. HEIC and HEIF work only
+when the browser can decode them. For `.glb` and `.gltf`, drag to orbit, right drag to pan, use the
+wheel or a pinch to zoom, and choose **Reset view** to return to the opening angle. A `.gltf`
+can use buffers and textures in its own folder; unsupported glTF extensions and unavailable WebGL
+show an error in the viewer. The pane shows a rendered model poster when headless Chrome,
+Chromium or Edge can make one. Its browser viewer is interactive.
 
 The wheel and the trackpad scroll it too. The search is literal text, case-insensitive unless the
 query has a capital letter. It covers markdown, HTML, text and code; while it is on, the item shows
 as plain text (markdown as its source, HTML as its text), and it ends when the selection moves to
-another item. In the `v` pane, text and code show as plain text rows (no highlighting), so they can
-be scrolled from the keys. Images, thumbnails and folders have nothing
-to search, and `/` says so.
+another item; Esc ends it, and text and code go back to the highlighted editor at the top. Images,
+thumbnails and folders have nothing to search, and `/` says so.
 
 Each key in the list is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can
 bind in `keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the popup.
 
-In a pane 520 px or wider, the selected item's preview shows beside the list: markdown and HTML
-rendered (HTML's text and structure, without its CSS or scripts), text and code highlighted, images,
-a folder's entries, and on macOS a Quick Look thumbnail of PDF and anything else Quick Look can draw
+In a pane 520 px or wider, the selected file's preview shows beside the list: markdown, local HTML
+as rendered tiles, text and code highlighted, images with Fit, zoom and keyboard pan controls,
+and on macOS a Quick Look thumbnail of PDF and anything else Quick Look can draw
 (on Linux those show their type's icon). Narrower, `p`
-shows it below the list. A read item whose file changed since shows a "changed" chip. Executable
+shows it below the list. Click the HTML preview to give its keyboard scroll keys focus; list keys
+still navigate the list when it has focus. HTML on another machine and local HTML when tile rendering
+is unavailable show readable text and structure without CSS or scripts. Enter on a folder item browses its contents in the reading-list pane. Enter or Right enters a subfolder, Backspace or Left goes up, and the Up row returns to the parent. **Show hidden** or `.` includes hidden entries. The existing space, agent, type, unread and text filters apply to the entries; `r` and `d` mark an entry read or done, and Tab switches between open and done entries. Select a file to preview it in the pane; Space opens its rich viewer when supported, and Enter opens it or reveals it if it could run. A selected folder shows only a brief preview message. Browsing never goes above the item's root or follows symlinks. Each folder lists at most 200 entries and browsing stops at 12 levels. Remote entries are listed on their machine; only the selected file is copied when its preview needs a local copy.
+
+A read item whose file changed
+since shows a "changed" chip. Executable
 items (apps, scripts, and on Linux `.desktop` files, AppImages and packages; on Windows `.exe`,
 `.bat`, `.cmd`, `.ps1`, `.msi`, `.lnk`, `.vbs`, `.js`, `.hta`, disk images and the like, and any
 type in `PATHEXT`) are shown in the file manager, never opened.
+
+The in-pane code preview uses Herdr's installed syntax set. Its source is read up to 512 KiB.
+Extensionless files with a recognized `#!` line also get a code preview. For code files, Space opens
+the platform's preview window, which may display them differently. The `v` pane highlights them
+the same way; an active search shows plain text.
+
+| Files | In-pane syntax | Reason for fallback |
+|---|---|---|
+| `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx` | JavaScript | TypeScript and JSX grammars are unavailable. |
+| `.json`, `.jsonc`; `.yaml`, `.yml`, `.toml` | JSON; YAML | JSON with comments and TOML grammars are unavailable. |
+| `.rs`, `.go`, `.py`, `.rb`, `.c`, `.h`, `.cc`, `.cpp`, `.hpp`, `.java` | Matching language (`.h` uses C) | |
+| `.sh`, `.bash`, `.zsh`, `.fish`, `.css`, `.sql`, `.lua`, `.xml` | Matching language | |
+| `Makefile`, `GNUmakefile`, `.mk`, `.gradle` | Makefile; Groovy for Gradle | |
+| `.diff`, `.patch`, `.cs`, `.php`, `.r`, `.bat`, `.cmd`, `.el`, `.erl`, `.hs`, `.ml`, `.scala`, `.pl`, `.m` | Matching language (Objective-C for `.m`) | |
+| `.vue`, `.svelte`, `.scss` | HTML; CSS for SCSS | Their own grammars are unavailable. |
+| `Dockerfile`, `Containerfile`, `.ini`, `.cfg`, `.conf`, `.env`, `.env.*`, `.proto`, `.graphql`, `.gql`, `.tf`, `.hcl`, `.nix` | Plain text | No matching grammar is installed. |
+| `.kt`, `.kts`, `.swift`, `.zig`, `.ps1`, `.ex`, `.exs`, `.dart`, `.jl` | Plain text | No matching grammar is installed. |
+| `.txt`, `.log`, `.csv`, `.tsv`, `.org`, `.adoc`; `.rst` | Plain text; reStructuredText for `.rst` | Tabular files are shown as text. |
+| Extensionless `#!` scripts using Python, Node, Deno, Bun, bash, sh, zsh, fish, Ruby or Perl | Interpreter's matching syntax (JavaScript for Node, Deno and Bun) | Other shebangs keep the usual file preview. |
 
 ### Other machines
 
@@ -321,7 +413,7 @@ rm -rf ~/.config/herdr-app/mods/readlist
 ```
 
 Then remove the `cmd-shift-i` (or `ctrl-shift-i`) line from your `~/.config/herdr-app/keys.json` and any `readlist`
-block from your layouts, and `~/.config/herdr-app/readlist/` if you wrote your own handler. If you installed `rl`, delete `~/.local/bin/rl` (on each machine you
+block from your layouts, and `~/.config/herdr-app/readlist/` (your own handler, if you wrote one, and the viewer's session file). The built-in viewer's drawn pages are in `~/.config/herdr-app/readlist-tile-cache/` and `readlist-model-cache/`, and a Space preview choice is the `readlist` entry in `~/.config/herdr-app/settings.json`; remove those too. If you installed `rl`, delete `~/.local/bin/rl` (on each machine you
 installed it on; on Windows `rl.ps1`, `rl.cmd` and `rl` in `%USERPROFILE%\.local\bin`, and that
 folder from your user PATH if nothing else uses it). Your list stays in
 `~/.local/state/reading-list/` (`%LOCALAPPDATA%\reading-list` on Windows) until you delete that
@@ -346,5 +438,9 @@ CI (`.github/workflows/test.yml`) runs the tests on Linux, macOS and Windows. On
 of the `sh` scripts are skipped and `test/windows.test.mjs` runs `rl.ps1`, the helper, the handler
 runner (with ACLs set by `icacls`) and the built-in handler in its dry-run mode.
 
-[docs/design.md](docs/design.md) has the design. MIT licence; the icons are
-[Lucide](https://lucide.dev) (ISC, see `mods/readlist/icons/LICENSE`).
+[docs/design.md](docs/design.md) has the design, [docs/viewer-contract.md](docs/viewer-contract.md)
+the built-in viewer's, and [CHANGELOG.md](CHANGELOG.md) what changed. MIT licence; the icons are
+[Lucide](https://lucide.dev) (ISC, see `mods/readlist/icons/LICENSE`). The built-in viewer bundles
+[Marked](https://github.com/markedjs/marked) (MIT), [PDF.js](https://github.com/mozilla/pdf.js)
+(Apache-2.0) and [Three.js](https://threejs.org) (MIT), each with its `LICENSE` under
+`mods/readlist/viewer/`; `mods/readlist/viewer/VENDORED.md` records their sources and checksums.

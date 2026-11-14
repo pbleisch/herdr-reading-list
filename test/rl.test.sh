@@ -153,5 +153,58 @@ eq "$("$RL" ls --all)" "" "empty list as text"
 eq "$(readlink "$repo/bin/rl")" ../mods/readlist/bin/rl "bin/rl links to the mod's rl"
 eq "$("$repo/bin/rl" ls --all)" "" "bin/rl runs"
 
+# preview is a transient handoff: only the app receives a JSON argument.
+mkdir -p "$scratch/mock" "$scratch/app/mods/readlist/viewer"
+cat >"$scratch/mock/herdr-app" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$@" >"$MOCK_PREVIEW_ARGS"
+[ "${MOCK_PREVIEW_FAIL:-0}" = 0 ]
+EOF
+cat >"$scratch/mock/node" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$@" >"$MOCK_NODE_ARGS"
+EOF
+chmod +x "$scratch/mock/herdr-app" "$scratch/mock/node"
+touch "$scratch/app/mods/readlist/viewer/host.mjs"
+awkward="$scratch/docs/sub dir/é 'quote' \"double\".html"
+printf '<p>preview</p>\n' >"$awkward"
+ln -s "$awkward" "$scratch/alias.html"
+before_state=$(cat "$READING_LIST_DIR/state.json")
+MOCK_PREVIEW_ARGS="$scratch/pane.args" PATH="$scratch/mock:$PATH" "$RL" preview --pane -- "$scratch/alias.html" >/dev/null
+eq "$?" 0 "preview pane exits 0"
+eq "$(sed -n '1p' "$scratch/pane.args")" do "pane uses herdr-app do"
+eq "$(sed -n '2p' "$scratch/pane.args")" pane.split "pane uses documented split"
+node -e 'const fs=require("fs"); const a=fs.readFileSync(process.argv[1],"utf8").trim().split("\n"); const p=JSON.parse(a[2]); process.exit(p.direction==="right" && p.mod==="readlist" && p.props.role==="preview" && p.props.file===process.argv[2] ? 0 : 1)' "$scratch/pane.args" "$awkward"
+eq "$?" 0 "pane props encode the canonical awkward path"
+MOCK_PREVIEW_ARGS="$scratch/folder.args" PATH="$scratch/mock:$PATH" "$RL" preview -- "$scratch/docs" 2>"$scratch/folder-error.txt"
+eq "$?" 1 "folder preview is refused"
+case $(cat "$scratch/folder-error.txt") in *'folders are browsed in the reading list'*) ok ;; *) fail "folder refusal explains list browsing" ;; esac
+[ ! -e "$scratch/folder.args" ] || fail "folder preview must not open a pane"
+eq "$(cat "$READING_LIST_DIR/state.json")" "$before_state" "preview leaves read state alone"
+eq "$(find "$READING_LIST_DIR/items" -type f | wc -l | tr -d ' ')" 0 "preview creates no list item"
+MOCK_NODE_ARGS="$scratch/browser.args" HERDR_APP_HOME="$scratch/app" PATH="$scratch/mock:$PATH" "$RL" preview --browser -- "$awkward" >/dev/null
+eq "$?" 0 "browser handoff exits 0"
+eq "$(sed -n '1p' "$scratch/browser.args")" "$scratch/app/mods/readlist/viewer/host.mjs" "browser uses installed host"
+eq "$(sed -n '2p' "$scratch/browser.args")" open "browser uses host open"
+eq "$(sed -n '4p' "$scratch/browser.args")" "$awkward" "browser keeps the file one argument"
+for args in 'preview --' 'preview --pane' 'preview --browser --'; do
+  # Intentionally split known syntax tokens; file paths are always passed quoted above.
+  "$RL" $args 2>/dev/null
+  eq "$?" 2 "preview incomplete syntax exits 2"
+done
+"$RL" preview -- https://example.test/a.html 2>"$scratch/refusal.txt"
+eq "$?" 1 "preview refuses URLs"
+case $(cat "$scratch/refusal.txt") in *'local files only'*) ok ;; *) fail "URL refusal explains local-only rule" ;; esac
+"$RL" preview --on elsewhere -- "$awkward" 2>/dev/null
+eq "$?" 1 "preview refuses remote machine option"
+"$RL" preview -- machine:report.pdf 2>/dev/null
+eq "$?" 1 "preview refuses remote path syntax"
+"$RL" preview -- "$scratch/missing.html" 2>/dev/null
+eq "$?" 1 "preview refuses missing file"
+"$RL" preview --browser -- "$scratch/docs" 2>/dev/null
+eq "$?" 1 "browser mode needs a file"
+MOCK_PREVIEW_ARGS="$scratch/pane.args" MOCK_PREVIEW_FAIL=1 PATH="$scratch/mock:$PATH" "$RL" preview -- "$awkward" 2>/dev/null
+eq "$?" 1 "preview without a Herdr window exits 1"
+
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [ "$fails" -eq 0 ]

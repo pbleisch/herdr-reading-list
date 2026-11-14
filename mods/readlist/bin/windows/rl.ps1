@@ -4,6 +4,7 @@
 #   rl ls [--unread | --done | --all] [--json]
 #   rl done <path|url|id>
 #   rl rm <path|url|id>
+#   rl preview [--pane|--browser] -- PATH
 #
 # The Windows rl (PowerShell 7): the same commands, item files and ids as the POSIX rl in
 # ../rl. Each item is one JSON file, items\<id>.json, under $env:READING_LIST_DIR (default
@@ -56,6 +57,7 @@ usage:
   rl ls [--unread | --done | --all] [--json]
   rl done <path|url|id>
   rl rm <path|url|id>
+  rl preview [--pane|--browser] -- PATH
 
 Adding a path or URL that is already on the list replaces its item (unread again, at the
 top); with --if-new it leaves that item as it is and only prints its id.
@@ -226,6 +228,42 @@ function Get-AbsPath([string]$p) {
 	} catch {
 		return $null
 	}
+}
+
+function Cmd-Preview([string[]]$a) {
+	$mode = 'pane'
+	$at = 0
+	if ($a.Count -gt 0 -and $a[0] -in @('--pane', '--browser')) {
+		$mode = $a[0].Substring(2)
+		$at++
+	}
+	if ($a.Count -gt $at -and $a[$at] -match '^--on(?:=|$)') { Die 'remote machine previews are not supported; use a local file' }
+	if ($a.Count -ne $at + 2 -or $a[$at] -cne '--' -or -not $a[$at + 1]) {
+		[Console]::Error.WriteLine('rl: preview needs [--pane|--browser] -- PATH')
+		throw [RlExit]::new(2)
+	}
+	$target = $a[$at + 1]
+	if ($target -match '://' -or $target -match '^(?![A-Za-z]:)[^\\/]+:') {
+		Die 'preview accepts local files only; URLs and remote machines are not supported'
+	}
+	if ($target -match '^\\\\' -or $target -match '^//') { Die 'preview accepts files on a local drive only; remote machines are not supported' }
+	$real = Get-AbsPath $target
+	if (-not $real -or (-not [IO.File]::Exists($real) -and -not [IO.Directory]::Exists($real))) { Die "no such local file or folder: $target" }
+	if ([IO.Directory]::Exists($real)) { Die 'folders are browsed in the reading list; add the folder with rl add and press Enter on it' }
+	try { $real = Get-RealPath $real $true } catch { Die "cannot resolve local path: $target" }
+	if ($mode -eq 'browser') {
+		$appDir = if ($env:HERDR_APP_HOME) { $env:HERDR_APP_HOME } else { Join-Path $HOME '.config/herdr-app' }
+		$viewerHost = Join-Path $appDir 'mods/readlist/viewer/host.mjs'
+		if (-not [IO.File]::Exists($viewerHost)) { Die 'browser viewer is not installed in Herdr' }
+		if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Die 'browser viewer needs Node.js' }
+		& node $viewerHost open (Join-Path $appDir 'readlist/viewer') $real
+		if ($LASTEXITCODE -ne 0) { Die 'browser viewer could not open the file' }
+		return
+	}
+	if (-not (Get-Command herdr-app -ErrorAction SilentlyContinue)) { Die 'preview pane needs herdr-app on PATH' }
+	$json = '{"direction":"right","mod":"readlist","props":{"role":"preview","file":' + (Json-Str $real) + '}}'
+	& herdr-app do pane.split $json
+	if ($LASTEXITCODE -ne 0) { Die 'preview pane needs a running Herdr window' }
 }
 
 function Now-Iso { return [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") }
@@ -599,6 +637,7 @@ try {
 		{ $_ -in @('ls', 'list') } { Cmd-Ls $rest }
 		'done' { Cmd-Done $rest }
 		{ $_ -in @('rm', 'remove') } { Cmd-Rm $rest }
+		'preview' { Cmd-Preview $rest }
 		{ $_ -in @('-h', '--help', 'help') } { Say $Usage }
 		default {
 			[Console]::Error.WriteLine($Usage)

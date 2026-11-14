@@ -436,18 +436,40 @@ switch -CaseSensitive ($op) {
 			$s.Dispose()
 		}
 	}
-	# LIST_DIR_SCRIPT: the folder's entries (hidden ones too), folders with a trailing /, at
-	# most $a[1] + 1.
+	# LIST_DIR_SCRIPT: folders first, then files, omitting links and hidden names by default.
 	'listdir' {
-		if ($a.Count -ne 2 -or -not (Test-LocalPath $a[0])) { exit 2 }
+		if ($a.Count -ne 3 -or -not (Test-LocalPath $a[0])) { exit 2 }
 		try {
-			$all = @([IO.DirectoryInfo]::new($a[0]).GetFileSystemInfos() | Sort-Object Name)
+			$all = @([IO.DirectoryInfo]::new($a[0]).GetFileSystemInfos() |
+				Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+					($a[1] -eq '1' -or (-not $_.Name.StartsWith('.') -and -not ($_.Attributes -band [IO.FileAttributes]::Hidden))) -and
+					$_.Name -notmatch "[`r`n`t]" } |
+				Sort-Object @{ Expression = { $_ -isnot [IO.DirectoryInfo] } }, Name)
 		} catch {
 			Fail "cannot list $($a[0])"
 		}
-		foreach ($e in @($all | Select-Object -First ([int]$a[1] + 1))) {
-			Say $(if ($e -is [IO.DirectoryInfo]) { "$($e.Name)/" } else { $e.Name })
+		foreach ($e in @($all | Select-Object -First ([int]$a[2] + 1))) {
+			Say $(if ($e -is [IO.DirectoryInfo]) { "d`t$($e.Name)" } else { "f`t$($e.Name)" })
 		}
+	}
+	'safe-path' {
+		if ($a.Count -ne 2 -or -not (Test-LocalPath $a[0]) -or -not (Test-LocalPath $a[1])) { exit 2 }
+		$root = [IO.Path]::GetFullPath($a[0])
+		if (-not [IO.Directory]::Exists($root) -or ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 2 }
+		if ($root -notmatch '^[A-Za-z]:\\$') { $root = $root.TrimEnd('\') }
+		$path = [IO.Path]::GetFullPath($a[1]).TrimEnd('\')
+		if ($path -match '^[A-Za-z]:$') { $path += '\' }
+		$prefix = if ($root.EndsWith('\')) { $root } else { "$root\" }
+		if ($path -ne $root -and -not $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { exit 2 }
+		$rel = $path.Substring($root.Length).TrimStart('\')
+		$cur = $root
+		foreach ($part in $rel.Split('\', [StringSplitOptions]::RemoveEmptyEntries)) {
+			if ($part -eq '.' -or $part -eq '..') { exit 2 }
+			$cur = [IO.Path]::Combine($cur, $part)
+			if (-not (Test-Path -LiteralPath $cur)) { exit 2 }
+			if ((Get-Item -LiteralPath $cur).Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 2 }
+		}
+		Say 'ok'
 	}
 	'cache' { Make-Image $a }
 	# PRUNE_SCRIPT: removes cached images of items no longer listed ($a[1..]: the ids kept).

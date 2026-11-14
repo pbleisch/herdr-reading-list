@@ -9,7 +9,7 @@ import { parseState, serializeState, applyAction, isChanged, prune, withInbox, r
 import { NO_FILTER, applyFilters, filterRows, isFiltered, textMatches, options, labelFor, keyOf, MENU, menuHeight, menuAnchor } from "../mods/readlist/core/filters.js";
 import { arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFor, toastAction, CLAIM_MS, CLAIM_MAX, QUIET_MS } from "../mods/readlist/core/arrival.js";
 import { INBOX_SCRIPT, ADD_SCRIPT, parseInbox, inboxPlan, SETTLE_S } from "../mods/readlist/core/inbox.js";
-import { viewerPane, newPane, selectedId, takesCommand, splitTarget } from "../mods/readlist/core/viewer.js";
+import { viewerPane, newPane, selectedId, takesCommand, splitTarget, previewItem, previewPanePlan } from "../mods/readlist/core/viewer.js";
 import { mergeKeys, forPlatform } from "../bin/merge-keys.mjs";
 
 import { repo, posix } from "./support.mjs";
@@ -300,6 +300,19 @@ test("viewerPane finds the open viewer; newPane finds the split", () => {
   assert.equal(selectedId("abc"), null);
 });
 
+test("transient previews have a separate identity and keep one live pane", () => {
+  const a = previewItem('/tmp/résumé "draft".pdf');
+  const b = previewItem('/tmp/other.pdf');
+  assert.equal(a.title, 'résumé "draft".pdf');
+  assert.equal(a.path, '/tmp/résumé "draft".pdf');
+  assert.match(a.id, /^preview-[a-f0-9]{16}$/);
+  assert.notEqual(a.id, b.id);
+  const panes = [{ pane: "first", mod: "readlist" }, { pane: "second", mod: "readlist" }];
+  assert.deepEqual(previewPanePlan({ pane: "first" }, panes, "second"), { keep: "first", close: "second" });
+  assert.deepEqual(previewPanePlan({ pane: "closed" }, panes, "second"), { keep: "second", close: null });
+  assert.deepEqual(previewPanePlan(null, panes, "second"), { keep: "second", close: null });
+});
+
 test("splitTarget is the tab's last pane, else the focused one", () => {
   const panes = [{ pane: "a", tab: "t1" }, { pane: "b", tab: "t2" }, { pane: "c", tab: "t1" }];
   assert.equal(splitTarget(panes, "t1", "a"), "c");
@@ -354,6 +367,7 @@ test("the f menu: tall enough for every row up to its cap, then it scrolls", () 
   const sec = (n) => ({ options: Array.from({ length: n }, (_, i) => ({ value: i })) });
   assert.equal(menuHeight([sec(2)]), 12 + MENU.head + 2 * MENU.row);
   assert.equal(menuHeight([sec(3), sec(5), sec(5), sec(2), sec(1), sec(2)]), MENU.max, "three spaces, five agents, five types and the rest");
+  assert.equal(menuHeight([sec(2), sec(2), sec(2), sec(2), sec(1), sec(2), sec(2)]), MENU.max, "the Space preview section stays within the scrollable menu cap");
 });
 
 test("the f menu from the keyboard opens under the header's right end, in window pixels", () => {

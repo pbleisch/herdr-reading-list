@@ -113,16 +113,21 @@ const TYPES = {
   image: ["png", "jpg", "jpeg", "gif", "svg", "webp", "heic", "heif", "tif", "tiff", "bmp", "psd", "avif"],
   html: ["html", "htm", "xhtml"],
   pdf: ["pdf"],
-  code: ["js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "jsonc", "yaml", "yml", "toml", "rs", "go", "py", "rb", "c", "h", "cc", "cpp", "hpp", "java", "kt", "swift", "sh", "zsh", "bash", "css", "scss", "sql", "lua", "zig", "xml"],
-  text: ["txt", "log", "csv", "tsv", "rst", "org", "adoc", "diff", "patch"],
+  video: ["mp4", "m4v", "webm", "mov"],
+  gltf: ["glb", "gltf"],
+  code: ["js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "jsonc", "yaml", "yml", "toml", "rs", "go", "py", "rb", "c", "h", "cc", "cpp", "hpp", "java", "kt", "kts", "swift", "sh", "zsh", "bash", "fish", "css", "scss", "sql", "lua", "zig", "xml", "mk", "diff", "patch", "ini", "cfg", "conf", "env", "proto", "graphql", "gql", "cs", "php", "r", "tf", "hcl", "nix", "vue", "svelte", "gradle", "ps1", "bat", "cmd", "el", "ex", "exs", "erl", "hs", "ml", "scala", "dart", "jl", "pl", "m"],
+  text: ["txt", "log", "csv", "tsv", "rst", "org", "adoc"],
 };
 const TYPE_OF = new Map(Object.entries(TYPES).flatMap(([t, exts]) => exts.map((e) => [e, t])));
+const CODE_NAMES = new Set(["dockerfile", "containerfile", "makefile", "gnumakefile"]);
 
-// What the row's icon shows: md, image, html, pdf, code, text, folder, url or file.
+// What the row's icon shows: md, image, html, pdf, video, gltf, code, text, folder, url or file.
 // `fsKind` is the STAT_SCRIPT letter when known.
 export function typeOf(item, fsKind) {
   if (item.url) return "url";
   if (fsKind === "d") return "folder";
+  const name = baseName(item.path).toLowerCase();
+  if (CODE_NAMES.has(name) || name === ".env" || name.startsWith(".env.")) return "code";
   return TYPE_OF.get(ext(item.path)) ?? "file";
 }
 

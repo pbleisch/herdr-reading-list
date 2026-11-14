@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading list preview</title>
+<link rel="stylesheet" href="shell.css">
+<header><strong>Reading list preview</strong><span id="title"></span></header>
+<div id="pdf-toolbar" hidden>
+  <button id="previous-page" type="button" title="Previous page">‹</button>
+  <label>Page <input id="page-number" type="number" min="1" value="1" aria-label="Page number"> <span id="page-count"></span></label>
+  <button id="next-page" type="button" title="Next page">›</button>
+  <button id="zoom-out" type="button" title="Zoom out">−</button>
+  <span id="zoom-value">100%</span>
+  <button id="zoom-in" type="button" title="Zoom in">+</button>
+  <form id="pdf-search-form" role="search"><input id="pdf-search" type="search" placeholder="Find in PDF" aria-label="Find in PDF"><button type="submit">Find</button></form>
+  <button id="next-match" type="button" title="Next match">Next</button>
+  <span id="search-count" role="status"></span>
+  <button id="copy-text" type="button" title="Copy selected text, or the current page">Copy text</button>
+</div>
+<div id="image-toolbar" hidden>
+  <button id="image-fit" type="button">Fit</button><button id="image-actual" type="button">Actual size</button>
+  <button id="image-minus" type="button" title="Zoom out">−</button><span id="image-zoom">100%</span><button id="image-plus" type="button" title="Zoom in">+</button>
+  <button id="image-rotate" type="button" title="Rotate clockwise">Rotate ↻</button>
+  <span class="hint">Wheel or pinch to zoom · drag to pan · F fit · 1 actual · R rotate</span>
+</div>
+<div id="model-toolbar" hidden><button id="model-reset" type="button">Reset view</button><span class="hint">Drag to orbit · right drag to pan · wheel or pinch to zoom</span></div>
+<main>
+  <iframe id="document" title="Selected document" sandbox="" hidden></iframe>
+  <div id="pdf-stage" hidden><div id="pdf-page"><canvas id="pdf-canvas"></canvas><div id="pdf-text" class="textLayer"></div></div></div>
+  <div id="video-stage" hidden><video id="video" controls playsinline></video></div>
+  <div id="image-stage" tabindex="0" aria-label="Image preview" hidden><img id="still-image" alt="Selected image"></div>
+  <div id="model-stage" aria-label="Interactive 3D model" hidden></div>
+  <div id="unsupported" hidden><img id="poster" alt="Video poster" hidden><p>This browser cannot play this video format.</p><button id="open-default" type="button">Open in default app</button></div>
+  <p id="message" role="status">Loading preview…</p>
+</main>
+<script type="module" src="shell.js"></script>
+</html>

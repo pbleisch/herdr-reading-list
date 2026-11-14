@@ -7,6 +7,23 @@
 // hint: the pane is looked up in panes() each time, so a viewer closed by hand is noticed.
 
 import { NAME } from "./name.js";
+import { baseName } from "./paths.js";
+
+// A transient file uses the list's renderer without becoming a list item. The prefix keeps
+// its thumbnail cache separate from real item ids.
+export function previewItem(file) {
+  let hash = 0xcbf29ce484222325n;
+  for (const char of file) hash = BigInt.asUintN(64, (hash ^ BigInt(char.codePointAt(0))) * 0x100000001b3n);
+  return { id: `preview-${hash.toString(16).padStart(16, "0")}`, path: file, url: null,
+    title: baseName(file), note: null, added_at: "1970-01-01T00:00:00Z" };
+}
+
+// A new split is only a handoff when a recorded preview pane is still open. It closes
+// after updating the old pane's file, so repeated CLI calls keep the same pane id.
+export function previewPanePlan(previous, panes, current) {
+  const old = previous?.pane && panes.some((p) => p.pane === previous.pane && p.mod === NAME) ? previous.pane : null;
+  return old && old !== current ? { keep: old, close: current } : { keep: current, close: null };
+}
 
 // The pane of the open viewer, or null.
 export function viewerPane(viewer, panes) {

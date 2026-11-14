@@ -306,14 +306,13 @@ nothing is shadowed.
 | Ctrl-D / Ctrl-U | scroll half a page |
 | `g` / Shift-G, Home / End | the top / the bottom |
 
-- `TextView` and `Editor` scroll only under the wheel, with no way to move them from code, so the
-  viewer lays the text out at full height in a clipped box and moves it up by an offset it keeps
-  itself, measured with `on_size_change`: markdown and HTML as `TextView` (not scrollable), text
-  and code as the rows search draws (below; no highlighting there, only the rows on screen built).
-  The wheel and the trackpad (`on_scroll_wheel`), the keys and search all set the offset; a thumb
-  on the right shows where it is, and a click on its track pages toward the click. Another item
-  starts at the top. The in-pane preview beside the list keeps `TextView`'s and `Editor`'s own
-  scrolling, since its keys move the selection.
+- `TextView` and `Editor` do not expose programmatic scrolling. The viewer lays markdown and
+  remote HTML out at full height in a clipped box and moves them by an offset it keeps itself,
+  measured with `on_size_change`. The wheel, trackpad, keys and search set this offset; a thumb
+  on the right shows where it is, and a click on its track pages toward the click. Code and text
+  use the same readonly, syntax-highlighted `Editor` as the in-pane preview, with its native
+  scrolling. The viewer's scroll keys cannot move the editor because its scroll position is not
+  exposed. Another item starts at the top.
 
 | Key | Action |
 |---|---|
@@ -325,12 +324,12 @@ nothing is shadowed.
   case). Matches do not overlap.
 - It searches the text the preview draws: markdown (its source, the omd threads left out), HTML
   (its text: `htmlText`), text and code. `TextView` and `Editor` can neither mark text nor scroll
-  to an offset, so while a search is on the viewer draws the text itself: rows in the code font,
+  to an offset, so while a search is on the viewer draws plain text itself: rows in the code font,
   long lines wrapped at the columns the pane holds (a monospace character taken as 0.62 of the
   font size), every match marked and the current one scrolled to the middle, with a whole row at the top
-  (rows also scroll by whole rows from the keys). Markdown shows as its
-  source then, HTML as its text; Esc puts them at the same share of the way down as the search
-  was.
+  (rows also scroll by whole rows from the keys). Markdown shows as its source then, HTML as its
+  text. Esc puts markdown and HTML at the same share of the way down as the search was; code
+  returns to the highlighted editor at the top.
 - A preview without text (an image, a thumbnail, a folder, a link, a missing file) says "Nothing
   to search in this preview." in the bar.
 - The search ends when the selection moves to another item. When the shown item's preview is
@@ -383,13 +382,13 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
 | Type | In-pane preview | Enter (open) |
 |---|---|---|
 | Markdown (`.md`, `.markdown`) | `TextView.markdown`, scrollable, links open through `on_link_click` (row 13); omd's thread block stripped | default app (`open`); later, Review in the review mod (5) |
-| Plain text, code, JSON, CSV, logs | readonly `Editor` with the extension's language (row 14), first 1 MiB (row 5) | default app |
+| Plain text, code, JSON, CSV, logs | readonly `Editor` with the extension's language (row 14), first 512 KiB (row 5); unsupported code grammars are labeled as plain text | default app |
 | Images (PNG, JPEG, GIF, SVG, WebP) | `image()` of a copy in the mod's cache (rows 15-17), scaled to the pane | Preview (default app) |
 | Other images (HEIC, TIFF, PSD) | Quick Look thumbnail (row 28) | default app |
 | HTML | `TextView.html`, scrollable, of the `<body>` without comments, `<head>`, scripts, styles, inline SVG and the like (`readableHtml`): its text and structure, no CSS. A Quick Look thumbnail kept the CSS (A.3) but showed only the top of the page and could not scroll | default browser (`open`); later, the review mod's full render (5) |
 | PDF | Quick Look thumbnail of page 1 | Preview |
 | Office, Keynote, video, anything with a Quick Look generator | Quick Look thumbnail | default app |
-| Folder | its listing (`ls`), first 200 entries | Finder |
+| Folder | a message to browse in the reading-list pane | enters its folder rows in the list |
 | URL | the URL and note | `cx.open_url` (row 22) |
 | Missing file | "gone" chip; the item stays until done | disabled |
 
@@ -402,7 +401,7 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
   at a time per copy (the latest selection wins), and kept until the item's file changes; making a
   new version removes the item's older ones, and items that leave the list lose theirs.
 - Text and markdown previews read the first 512 KiB with `head -c` (a file with a NUL byte gets a
-  Quick Look thumbnail instead); a folder lists its first 200 entries, folders first.
+  Quick Look thumbnail instead). Folder rows in the list show the first 200 entries, folders first.
 - These calls are the built-in macOS handler, `handlers/macos.sh` (4.7). Open is `open "$path"`.
   Quick Look is `qlmanage -p "$path"` started in the background, so the panel is not tied to the `exec` call and its 30 s limit (rows 26b
   and 29); the mod keeps the pid and Space again kills that pid, only while it is still `qlmanage`.

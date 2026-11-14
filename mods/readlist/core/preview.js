@@ -10,15 +10,47 @@ import { baseName } from "./paths.js";
 // shown below the list. At or above it, the list is on the left and the preview on the right.
 export const WIDE = 520;
 
-// The most text read into the pane, and the most folder entries listed.
+// The most text read into the pane.
 export const TEXT_BYTES = 512 * 1024;
-export const FOLDER_ENTRIES = 200;
 
 // Images GPUI draws itself; these are copied into the cache as they are. Other images
 // (HEIC, TIFF, PSD, ...) get a thumbnail from a handler like HTML and PDF do.
 const DRAWN = new Set(["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"]);
 
-const LANG = { mjs: "js", cjs: "js", ts: "js", tsx: "js", jsx: "js", jsonc: "json", yml: "yaml", toml: "yaml", zsh: "bash", sh: "bash", htm: "html", xhtml: "html" };
+// EditorState looks up Syntect syntax by file extension. Every value here is an
+// extension in the installed syntax set; "txt" deliberately requests plain text.
+const LANG = {
+  js: "js", mjs: "js", cjs: "js", ts: "js", tsx: "js", jsx: "js",
+  json: "json", jsonc: "json", yaml: "yaml", yml: "yaml", toml: "yaml",
+  rs: "rs", go: "go", py: "py", rb: "rb", c: "c", h: "c", cc: "cpp", cpp: "cpp", hpp: "cpp",
+  java: "java", kt: "txt", kts: "txt", swift: "txt",
+  sh: "sh", zsh: "zsh", bash: "bash", fish: "fish",
+  css: "css", scss: "css", sql: "sql", lua: "lua", zig: "txt", xml: "xml",
+  mk: "mk", diff: "diff", patch: "diff", ini: "txt", cfg: "txt", conf: "txt", env: "txt",
+  proto: "txt", graphql: "txt", gql: "txt", cs: "cs", php: "php", r: "r",
+  tf: "txt", hcl: "txt", nix: "txt", vue: "html", svelte: "html",
+  gradle: "gradle", ps1: "txt", bat: "bat", cmd: "cmd", el: "el", ex: "txt", exs: "txt",
+  erl: "erl", hs: "hs", ml: "ml", scala: "scala", dart: "txt", jl: "txt", pl: "pl", m: "m",
+  txt: "txt", log: "txt", csv: "txt", tsv: "txt", rst: "rst", org: "txt", adoc: "txt",
+};
+const NAME_LANG = { dockerfile: "txt", containerfile: "txt", makefile: "makefile", gnumakefile: "makefile" };
+
+export function shebangLanguage(firstLine) {
+  const line = (firstLine ?? "").split(/\r?\n/, 1)[0];
+  if (!line.startsWith("#!")) return null;
+  let parts = line.slice(2).trim().split(/\s+/);
+  let command = parts.shift()?.split(/[\\/]/).pop()?.toLowerCase();
+  if (command === "env") {
+    parts = parts.filter((p) => p !== "-S" && p !== "--");
+    command = parts.find((p) => !p.startsWith("-"))?.split(/[\\/]/).pop()?.toLowerCase();
+  }
+  if (/^python(?:\d+(?:\.\d+)*)?$/.test(command ?? "")) return "py";
+  if (["node", "nodejs", "deno", "bun"].includes(command)) return "js";
+  if (command === "ruby") return "rb";
+  if (command === "perl") return "pl";
+  if (["sh", "bash", "zsh", "fish"].includes(command)) return command;
+  return null;
+}
 
 export const ext = (path) => {
   const name = baseName(path);
@@ -33,22 +65,32 @@ export function previewShown(width, choice) {
 }
 
 // What the preview draws for an item, given its STAT line (`kind mtime size`, or `-`):
-// { how: "url" | "missing" | "markdown" | "html" | "text" | "image" | "thumb" | "folder", lang?, ext? }.
+// { how: "url" | "missing" | "markdown" | "html" | "text" | "image" | "model" | "thumb" | "folder", lang?, ext? }.
 // HTML draws as text (readableHtml), so a long page scrolls like markdown does. "thumb"
 // asks the handlers for a thumbnail (core/handlers.js); when none makes one, the preview
 // shows the type's icon.
-export function previewKind(item, fsKind) {
+export function previewKind(item, fsKind, firstLine) {
   if (item.url) return { how: "url" };
   if (!fsKind || fsKind === "-") return { how: "missing" };
   if (fsKind === "d") return { how: "folder" };
   const e = ext(item.path);
+  const name = baseName(item.path).toLowerCase();
   const type = typeOf(item, fsKind);
   if (type === "md") return { how: "markdown" };
   if (type === "html") return { how: "html" };
-  if (type === "code" || type === "text") return { how: "text", lang: LANG[e] ?? (e || "text") };
+  if (type === "code" || type === "text") return { how: "text", lang: NAME_LANG[name] ?? (name === ".env" || name.startsWith(".env.") ? "txt" : LANG[e]) };
+  if (!e && (fsKind === "f" || fsKind === "x")) {
+    if (firstLine === undefined) return { how: "shebang" };
+    const lang = shebangLanguage(firstLine);
+    if (lang) return { how: "text", lang };
+  }
+  if (type === "gltf") return { how: "model" };
   if (type === "image" && DRAWN.has(e)) return { how: "image", ext: e };
   return THUMB;
 }
+
+// A code file that Herdr can show only as plain text, so the pane can say why.
+export const plainCodeFallback = (item, fsKind, lang) => lang === "txt" && typeOf(item, fsKind) === "code";
 
 // A file with no drawn preview: a thumbnail from a handler.
 export const THUMB = Object.freeze({ how: "thumb" });
@@ -85,9 +127,6 @@ export function parseStat(line) {
 // The first TEXT_BYTES of a file ($1); previewText says when the file was longer.
 export const HEAD_SCRIPT = `head -c ${TEXT_BYTES} -- "$1"`;
 
-// A folder's entries ($1), folders marked with a trailing /; one more than shown, so the
-// pane can say there are more.
-export const LIST_DIR_SCRIPT = `ls -1Ap -- "$1" | head -n ${FOLDER_ENTRIES + 1}`;
 
 // Puts an image for $1 at $3 (inside the cache folder $2), and removes the item's older
 // images ($4 is the item id). $5 is "copy", or the thumbnail size; then the rest is the
@@ -186,14 +225,6 @@ export function htmlText(html) {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-}
-
-// A folder listing from LIST_DIR_SCRIPT's output: { entries: [{name, dir}], more }.
-export function parseFolder(stdout) {
-  const lines = (stdout ?? "").split("\n").filter(Boolean);
-  const entries = lines.slice(0, FOLDER_ENTRIES).map((l) => ({ name: l.replace(/\/$/, ""), dir: l.endsWith("/") }));
-  entries.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
-  return { entries, more: lines.length > FOLDER_ENTRIES };
 }
 
 // What `c` copies: the path, or the URL.

@@ -7,7 +7,7 @@ import { who, byAddress } from "./state.js";
 export const NO_FILTER = Object.freeze({ space: null, agent: null, type: null, unread: false, text: "" });
 
 export const TYPE_LABEL = {
-  md: "Markdown", text: "Text", code: "Code", html: "HTML", image: "Images", pdf: "PDF",
+  md: "Markdown", text: "Text", code: "Code", html: "HTML", image: "Images", pdf: "PDF", video: "Video", gltf: "3D models",
   folder: "Folders", url: "Links", file: "Other files",
 };
 
@@ -17,7 +17,7 @@ export const TYPE_LABEL = {
 export function keyOf(item, dim, fsKind) {
   if (dim === "space") return item.by.space ? (item.machine ? `${item.machine}/${item.by.space}` : item.by.space) : "";
   if (dim === "agent") return item.by.terminal ? `t:${byAddress(item)}` : `f:${item.by.from ?? ""}`;
-  if (dim === "type") return typeOf(item, fsKind);
+  if (dim === "type") return typeOf(item, item.folderKind ?? fsKind);
   throw new Error(`unknown filter ${dim}`);
 }
 

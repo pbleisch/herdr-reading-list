@@ -3,14 +3,15 @@ import assert from "node:assert/strict";
 import { posix } from "./support.mjs";
 import { execFileSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readdirSync, symlinkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeItem } from "../mods/readlist/core/items.js";
 import {
-  WIDE, TEXT_BYTES, FOLDER_ENTRIES, STAT1_SCRIPT, HEAD_SCRIPT, LIST_DIR_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT,
-  previewShown, previewKind, thumbSize, cacheName, parseStat, previewText, stripThreads, parseFolder, copyText,
+  WIDE, TEXT_BYTES, STAT1_SCRIPT, HEAD_SCRIPT, CACHE_SCRIPT, PRUNE_SCRIPT,
+  previewShown, previewKind, plainCodeFallback, shebangLanguage, thumbSize, cacheName, parseStat, previewText, stripThreads, copyText,
 } from "../mods/readlist/core/preview.js";
+import { FOLDER_ENTRIES, LIST_DIR_SCRIPT, SAFE_PATH_SCRIPT, parseFolder, folderItems } from "../mods/readlist/core/folder.js";
 
 const item = (over = {}) => normalizeItem({
   v: 1, id: "0123456789abcdef", path: "/tmp/plan.md", url: null, title: "plan.md", note: null,
@@ -29,17 +30,79 @@ test("previewShown follows the width until the person presses p", () => {
 test("previewKind picks how each type previews", () => {
   assert.deepEqual(previewKind(item(), "f"), { how: "markdown" });
   assert.deepEqual(previewKind(item({ path: "/a/x.ts" }), "f"), { how: "text", lang: "js" });
-  assert.deepEqual(previewKind(item({ path: "/a/x.log" }), "f"), { how: "text", lang: "log" });
+  assert.deepEqual(previewKind(item({ path: "/a/x.log" }), "f"), { how: "text", lang: "txt" });
   assert.deepEqual(previewKind(item({ path: "/a/x.PNG" }), "f"), { how: "image", ext: "png" });
   assert.deepEqual(previewKind(item({ path: "/a/x.heic" }), "f"), { how: "thumb" });
   assert.deepEqual(previewKind(item({ path: "/a/index.html" }), "f"), { how: "html" });
   assert.deepEqual(previewKind(item({ path: "/a/page.HTM" }), "f"), { how: "html" });
   assert.deepEqual(previewKind(item({ path: "/a/x.pdf" }), "f"), { how: "thumb" });
   assert.deepEqual(previewKind(item({ path: "/a/x.key" }), "f"), { how: "thumb" });
-  assert.deepEqual(previewKind(item({ path: "/a/run.sh" }), "x"), { how: "text", lang: "bash" });
+  assert.deepEqual(previewKind(item({ path: "/a/run.sh" }), "x"), { how: "text", lang: "sh" });
   assert.deepEqual(previewKind(item({ path: "/a/dir" }), "d"), { how: "folder" });
   assert.deepEqual(previewKind(item(), "-"), { how: "missing" });
   assert.deepEqual(previewKind(item({ path: null, url: "https://x.dev" }), null), { how: "url" });
+});
+
+test("code names and extensions select installed syntax names or a deliberate plain text fallback", () => {
+  const cases = {
+    "Dockerfile": "txt", "Containerfile": "txt", "Makefile": "makefile", "GNUmakefile": "makefile", "build.mk": "mk",
+    "change.diff": "diff", "change.patch": "diff", "app.ini": "txt", "app.cfg": "txt", "app.conf": "txt",
+    ".env": "txt", ".env.local": "txt", "app.env": "txt", "api.proto": "txt", "query.graphql": "txt", "query.gql": "txt",
+    "app.cs": "cs", "page.php": "php", "model.r": "r", "main.tf": "txt", "main.hcl": "txt", "config.nix": "txt",
+    "page.vue": "html", "page.svelte": "html", "app.kts": "txt", "build.gradle": "gradle", "setup.ps1": "txt",
+    "run.bat": "bat", "run.cmd": "cmd", "run.fish": "fish", "init.el": "el", "app.ex": "txt", "app.exs": "txt",
+    "worker.erl": "erl", "main.hs": "hs", "main.ml": "ml", "main.scala": "scala", "main.dart": "txt",
+    "main.jl": "txt", "main.pl": "pl", "main.m": "m", "data.csv": "txt", "data.tsv": "txt",
+    "app.ts": "js", "view.tsx": "js", "config.toml": "yaml", "main.scss": "css", "main.swift": "txt", "main.zig": "txt",
+  };
+  for (const [name, lang] of Object.entries(cases)) {
+    assert.deepEqual(previewKind(item({ path: `/a/${name}` }), "f"), { how: "text", lang }, name);
+  }
+});
+
+test("the full viewer uses the highlighted editor for standalone and browsed code files", () => {
+  const path = "/samples/code/web/app.js";
+  const standalone = item({ path });
+  const [browsed] = folderItems(item({ path: "/samples" }), ["code", "web"], [{ name: "app.js", dir: false }]);
+  assert.equal(browsed.path, path);
+  assert.deepEqual(previewKind(standalone, "f"), { how: "text", lang: "js" });
+  assert.deepEqual(previewKind(browsed, browsed.folderKind), { how: "text", lang: "js" });
+  assert.equal(plainCodeFallback(standalone, "f", "js"), false);
+  assert.equal(plainCodeFallback(browsed, browsed.folderKind, "js"), false);
+  assert.equal(plainCodeFallback(item({ path: "/samples/code/main.swift" }), "f", "txt"), true);
+  assert.equal(plainCodeFallback(item({ path: "/samples/notes.txt" }), "f", "txt"), false);
+
+  // Load the full-pane method with a stand-in native Editor; the old plain-row
+  // path fails this check without needing the GPUI runtime in the Node tests.
+  const source = readFileSync(new URL("../mods/readlist/main.js", import.meta.url), "utf8");
+  const method = source.match(/  viewerBody\(item, pv, t\) \{[\s\S]*?\n  \}/)?.[0];
+  assert.ok(method, "viewerBody is present");
+  const view = { flex_1() { return this; }, min_h() { return this; } };
+  const code = {};
+  const Editor = { new(state) { assert.equal(state, code); return view; } };
+  const viewerBody = new Function("Editor", "itemKey", `return ({${method}}).viewerBody;`)(Editor, (i) => i.id);
+  const pane = { rowsBody() { assert.fail("full code preview used plain rows"); } };
+  for (const codeItem of [standalone, browsed]) {
+    assert.equal(viewerBody.call(pane, codeItem, { how: "text", text: "const x = 1;", code }, {}), view);
+  }
+});
+
+test("extensionless shebangs use the bounded text read", () => {
+  const cases = {
+    "#!/usr/bin/python3.12\nprint('hi')": "py", "#!/usr/bin/env node\nconsole.log(1)": "js",
+    "#!/usr/bin/env -S deno run\n": "js", "#!/usr/bin/env bun\n": "js",
+    "#!/bin/bash\necho hi": "bash", "#!/bin/sh\necho hi": "sh", "#!/usr/bin/env zsh\n": "zsh",
+    "#!/usr/bin/env ruby\nputs 1": "rb", "#!/usr/bin/perl\nprint 1": "pl",
+  };
+  const script = item({ path: "/a/script" });
+  assert.deepEqual(previewKind(script, "f"), { how: "shebang" });
+  for (const [content, lang] of Object.entries(cases)) {
+    assert.equal(shebangLanguage(content), lang);
+    assert.deepEqual(previewKind(script, "f", content), { how: "text", lang });
+  }
+  assert.deepEqual(previewKind(script, "f", "just text"), { how: "thumb" });
+  assert.equal(shebangLanguage("first\n#!/bin/bash"), null);
+  assert.equal(shebangLanguage("#!/usr/bin/env unknown"), null);
 });
 
 test("thumbSize has two steps, Retina pixels", () => {
@@ -83,16 +146,38 @@ test("stripThreads drops omd's comment threads", () => {
 });
 
 test("parseFolder lists folders first and caps the entries", posix, () => {
-  assert.deepEqual(parseFolder("b.txt\nsub/\na.md\n.hidden\n"), {
+  assert.deepEqual(parseFolder("d\tsub\nf\t.hidden\nf\ta.md\nf\tb.txt\n"), {
     entries: [{ name: "sub", dir: true }, { name: ".hidden", dir: false }, { name: "a.md", dir: false }, { name: "b.txt", dir: false }],
     more: false,
   });
   const dir = mkdtempSync(join(tmpdir(), "rl-pv-"));
   for (let n = 0; n <= FOLDER_ENTRIES; n++) writeFileSync(join(dir, `f${n}`), "");
   mkdirSync(join(dir, "zz"));
-  const f = parseFolder(sh(LIST_DIR_SCRIPT, dir));
+  writeFileSync(join(dir, ".secret"), "");
+  symlinkSync(join(dir, "f0"), join(dir, "link"));
+  const f = parseFolder(sh(LIST_DIR_SCRIPT, dir, "0"));
   assert.equal(f.entries.length, FOLDER_ENTRIES);
   assert.equal(f.more, true);
+  assert.deepEqual(f.entries[0], { name: "zz", dir: true });
+  assert.ok(!f.entries.some((e) => e.name === ".secret" || e.name === "link"));
+  assert.deepEqual(parseFolder(sh(LIST_DIR_SCRIPT, dir, "1")).entries.slice(0, 2), [
+    { name: "zz", dir: true }, { name: ".secret", dir: false },
+  ]);
+});
+
+test("SAFE_PATH_SCRIPT keeps browsing inside the root and rejects symlinks", posix, () => {
+  const root = mkdtempSync(join(tmpdir(), "rl-safe-"));
+  const sub = join(root, "sub");
+  mkdirSync(sub);
+  writeFileSync(join(sub, "a.txt"), "ok");
+  symlinkSync(tmpdir(), join(root, "away"));
+  assert.equal(sh(SAFE_PATH_SCRIPT, root, join(sub, "a.txt")).trim(), "ok");
+  assert.throws(() => sh(SAFE_PATH_SCRIPT, root, join(root, "away")));
+  assert.throws(() => sh(SAFE_PATH_SCRIPT, root, join(root, "away", "elsewhere")));
+  assert.throws(() => sh(SAFE_PATH_SCRIPT, root, join(root, "..", "outside")));
+  const alias = join(mkdtempSync(join(tmpdir(), "rl-safe-link-")), "root");
+  symlinkSync(root, alias);
+  assert.throws(() => sh(SAFE_PATH_SCRIPT, alias, join(alias, "sub", "a.txt")));
 });
 
 test("CACHE_SCRIPT copies an image and replaces the item's older versions", posix, () => {

@@ -1,0 +1,38 @@
+:root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; }
+body { display: flex; flex-direction: column; background: Canvas; color: CanvasText; }
+header { display: flex; gap: 1rem; align-items: center; min-height: 42px; padding: 0 1rem; border-bottom: 1px solid GrayText; }
+#title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: GrayText; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: 0.5; }
+#pdf-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; padding: 0.5rem; border-bottom: 1px solid GrayText; }
+#image-toolbar, #model-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; padding: 0.5rem; border-bottom: 1px solid GrayText; }
+.hint { color: GrayText; margin-left: 0.5rem; font-size: 12px; }
+#pdf-toolbar[hidden], [hidden] { display: none !important; }
+#page-number { width: 4.5rem; }
+#pdf-search-form { display: flex; gap: 0.3rem; }
+#pdf-search { width: 11rem; }
+#search-count { min-width: 3rem; color: GrayText; }
+main { flex: 1; min-height: 0; position: relative; }
+iframe { display: block; border: 0; width: 100%; height: 100%; background: white; }
+#pdf-stage { width: 100%; height: 100%; overflow: auto; padding: 1rem; background: #666; }
+#pdf-page { position: relative; width: max-content; margin: 0 auto; background: white; box-shadow: 0 2px 12px #0006; }
+#pdf-canvas { display: block; }
+.textLayer { position: absolute; text-align: initial; inset: 0; overflow: clip; line-height: 1; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; }
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; }
+.textLayer span[role="img"] { user-select: none; cursor: default; }
+.textLayer .match { background: #ffe35d99; border-radius: 2px; }
+.textLayer ::selection { background: #4169e180; }
+#video-stage { display: grid; place-items: center; width: 100%; height: 100%; background: #111; }
+#video { max-width: 100%; max-height: 100%; }
+#image-stage, #model-stage { width: 100%; height: 100%; overflow: hidden; position: relative; background: #242932; }
+#image-stage { touch-action: none; cursor: grab; }
+#image-stage:active { cursor: grabbing; }
+#still-image { position: absolute; left: 50%; top: 50%; max-width: none; max-height: none; user-select: none; pointer-events: none; }
+#model-stage canvas { display: block; width: 100%; height: 100%; }
+#unsupported { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.8rem; text-align: center; padding: 1rem; }
+#unsupported p { margin: 0; }
+#poster { max-width: min(80vw, 720px); max-height: 55vh; object-fit: contain; }
+#message { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 1rem; text-align: center; background: Canvas; }
