@@ -280,7 +280,7 @@ Increment 1 has `j`/`k` and arrows, `g`/`G` and Home/End, Enter, Space (the Quic
 |---|---|
 | `j` / `k`, arrows | move |
 | Enter | open in the default app (5); marks read |
-| Space | macOS Quick Look panel (`qlmanage -p`, row 29), a toggle like Finder's; does not mark read. A link has no Quick Look: a notice says Enter opens it |
+| Space | a preview, a toggle like Finder's Quick Look; does not mark read. Markdown, HTML, PDF and still images: the preview window inside Herdr (4.8); video and glTF: the browser viewer; other files: the macOS Quick Look panel (`qlmanage -p`, row 29). A link has no preview: a notice says Enter opens it |
 | `p` | show or hide the preview in the pane (4.2) |
 | `o` | reveal in Finder (`open -R`); a link has nothing to reveal: a notice says so |
 | Shift-R | list this machine and every other machine again now (4.6) |
@@ -408,7 +408,12 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
   `qlmanage` does not activate itself, and on macOS 27 its panel opened behind Herdr, so the
   handler then activates its pid with `osascript -l JavaScript`
   (`NSRunningApplication.activateWithOptions`, no Apple Events, so no consent prompt) once its
-  window is on screen. The panel is then the active app until it closes.
+  window is on screen. The panel is then the active app until it closes. The same script then
+  waits for the panel to close and, if it was still the active app at that moment, activates the
+  app Space was pressed in (Herdr) again, since macOS would otherwise front another app's window.
+  The active app comes from `NSWorkspace.frontmostApplication`, kept current by running the
+  script's run loop; the window order is not used, because with several displays the panel stays
+  the top window of its display while another app is active.
   Quick Look only draws a preview, so it is safe for every type, executables included. Enter on
   executable types (`.app`, `.command`, scripts) reveals in Finder instead of opening, as herdr-md
   does for every non-markdown file. The rule (`core/items.js` `openAction`), checked again at the
@@ -565,6 +570,35 @@ calls in 4.5); the person may put their own in front of it.
   http(s). The rule that Enter on a file that could run reveals it (4.5) holds before any handler
   is asked. A process running as the person can swap the handler between the check and the run;
   that is not a boundary the mod can draw.
+
+### 4.8 The preview window
+
+Space on a Markdown, HTML, PDF or still-image item (with the default **Space preview → Built-in
+viewer**) opens this mod as a Herdr overlay window (`openOverlay` kind `window`, key
+`readlist-preview`, 820 px by 85 % of the window, props `{role: "window", file, title, source}`),
+so closing it leaves the person in Herdr. Herdr has no web view for mods, so the window shows a
+picture of the page: Markdown, HTML and PDF as the tiles of the in-pane HTML preview
+(`viewer/render.mjs`; Markdown through the host's rendered-Markdown route, PDF through the host's
+trusted `pages` view), images with the pane's image renderer. Links, selection, video and 3D are
+not interactive there; Enter (or **Enter · Interactive**) opens the browser viewer and closes the
+window. Video and glTF skip the window.
+
+- `shared("readlist.window")` is `{overlay, id, copy}` while it is open. Space in the list on its
+  item closes it, on another window type replaces its file in place (same key), on any other type
+  closes it first (`core/browser-viewer.js` `windowPlan`).
+- It takes the keyboard on open: Esc and Space close it, Enter goes interactive, the scroll keys of
+  the viewer pane (4.3) and the wheel scroll it, Backspace returns from a followed local link, and
+  `+`, `-`, `0` and the arrows zoom and pan an image. When it closes with the keyboard, it records
+  that in the shared value and the list that opened it takes the keyboard back.
+- A PDF shows its first 100 pages, with a note when there are more. The renderer gets up to five
+  minutes in the window (60 s in the pane).
+- Without Node.js or a headless browser, it shows the pane's text preview (Markdown and HTML) or
+  a note (PDF); Enter still tries the browser viewer.
+
+The browser viewer itself (docs/viewer-contract.md): on macOS with Chrome every open launches a
+new app window in front, and the older page closes itself when the host says a newer one spoke,
+since a window behind Herdr cannot bring itself forward. When the viewer page closes while Chrome
+is still the active app, the host activates the app the open came from (Herdr).
 
 ## 5. Hand-off to a review mod
 

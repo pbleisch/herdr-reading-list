@@ -15,14 +15,14 @@ export async function cacheKey(selected, files, width, scale, dark) {
   return hash.digest("hex").slice(0, 20);
 }
 
-// Only HTML pages in the viewer host's selected-file manifest become pane links.
+// Only HTML and Markdown pages in the viewer host's selected-file manifest become pane links.
 export function mapCapturedLinks(links, documentPrefix, files) {
   return links.filter((link) => link.href?.startsWith(documentPrefix)).flatMap((link) => {
     let name;
     try { name = decodeURIComponent(link.href.slice(documentPrefix.length).split(/[?#]/)[0]); }
     catch { return []; }
     const entry = files.get(name);
-    return entry?.mime === "text/html" ? [{ ...link, target: entry.target }] : [];
+    return entry?.mime === "text/html" || entry?.mime === "text/markdown" ? [{ ...link, target: entry.target }] : [];
   });
 }
 

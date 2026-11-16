@@ -5,18 +5,43 @@ The browser frontend in `mods/readlist/viewer/shell.html`, `shell.css` and `shel
 | Route | Meaning |
 | --- | --- |
 | `GET shell`, `shell.css`, `shell.js` | Trusted viewer frontend. |
-| `GET state` | JSON `{revision, title, kind, document}`. `kind` is `markdown`, `html`, `pdf`, `video`, `image`, `gltf` or `null`; `document` is a relative URL or `null`. Increment `revision` whenever selection changes. |
+| `GET state` | JSON `{revision, title, kind, document, superseded}`. `kind` is `markdown`, `html`, `pdf`, `video`, `image`, `gltf` or `null`; `document` is a relative URL or `null`. Increment `revision` whenever selection changes. `superseded` is true when the page asking (`?client=`) is not the newest viewer page. |
 | `GET version` | JSON `{build, pid}`. The launcher compares this with the installed viewer build and the private session file before reusing a host. |
-| `POST heartbeat`, `POST goodbye` | Viewer presence. The browser host uses it to avoid opening another surface. |
+| `POST heartbeat`, `POST goodbye` | Viewer presence. The browser host uses it to avoid opening another surface and, on macOS, to return focus when the viewer window closes. |
+| `GET pages`, `pages.js` | Trusted view of the selected PDF's pages stacked at the window's width, for the tile renderer. |
 | `GET/HEAD document/<path>` | The selected file. Markdown is returned as rendered HTML; Markdown, HTML and `.gltf` also expose their allowed local resources. The shell checks document availability with HEAD before loading it in the frame, and shows an error if rendering fails. PDF, video, images and glTF support byte-range requests. |
 | `GET pdfjs/pdf.min.mjs`, `pdfjs/pdf.worker.min.mjs` | Bundled PDF.js runtime, served by the browser host. A future host may map these URLs to its own local asset handler. |
 | `GET three/three.min.js`, `gltf-view.js`, `image-controls.js` | Bundled Three.js module and trusted viewer controls. No CDN or network runtime is used. |
 | `GET poster` | Optional JPEG derived from the selected video if FFmpeg is installed. Missing FFmpeg or a failed extraction returns 404. |
 | `POST open-default` | Opens the selected video in its default application. The request carries no path. |
 
-The browser host also accepts `POST select` with `{file: absoluteLocalPath}` and `POST close`. These are host control routes, not frontend routes. `close` clears the selection; Space on the same item leaves the browser surface blank and available for reuse. A future Herdr WebView host can load the same `shell` frontend, implement these routes, set its `document` URL to the WebView's local resource handler, and push selection changes by incrementing `revision`. It must enforce the same resource and document isolation rules. Browser launch, the loopback server, state file and browser heartbeat handling stay outside the frontend.
+Each frontend page names itself with a random `client` query parameter on `state`, `heartbeat` and
+`goodbye`. The page whose first request came last is the viewer; an older page sees `superseded`,
+clears itself and calls `window.close()` (its frame changes pages with `location.replace`, so its
+history holds one entry and the browser lets it close). A superseded page's `goodbye` is ignored.
+
+The browser host also accepts `POST select` with `{file: absoluteLocalPath, returnTo?, raise?}`, `POST surface` with `{bundle}` and `POST close`.
+`returnTo` is the pid of the app the selection came from and `raise: true` asks for a new window
+even when a viewer page is alive (on macOS with Chrome, every open: a window behind others cannot
+bring itself forward). `surface` records the bundle id of the app window the launcher opened
+(`com.google.Chrome`), or null for the system browser. On macOS, when the viewer page says
+`goodbye` and no page says hello within 600 ms (a reload), the host asks macOS for the active app
+and, only if it is still that browser, activates `returnTo` (`osascript -l JavaScript`,
+`NSRunningApplication.activateWithOptions`, no Apple Events). These are host control routes, not frontend routes. `close` clears the selection; Space on the same item leaves the browser surface blank and available for reuse. A future Herdr WebView host can load the same `shell` frontend, implement these routes, set its `document` URL to the WebView's local resource handler, and push selection changes by incrementing `revision`. It must enforce the same resource and document isolation rules. Browser launch, the loopback server, state file and browser heartbeat handling stay outside the frontend.
 
 ## Current behavior and later layers
+
+### The preview window
+
+Space on a local Markdown, HTML, PDF or still-image item opens the mod as a Herdr overlay window
+(`openOverlay({kind: "window", key: "readlist-preview"})`, props `{role: "window", file, title}`)
+instead of the browser surface. Markdown, HTML and PDF are drawn as tiles by `render.mjs`, with the
+same host, manifest and document CSP as below; Markdown goes through the host's rendered-Markdown
+document route, and PDF through the trusted `pages` view, which lays out every page (at most 100)
+and draws page canvases only around the tile being captured. Images use the pane's image renderer.
+The window takes the keyboard; Enter calls the same `host.mjs open` as the list and closes the
+window. Video and glTF go straight to the browser surface. Without tiles, the window shows the
+pane's text preview (none for PDF).
 
 ### In-pane HTML tiles
 
@@ -38,10 +63,9 @@ The mod shows only visible tiles. A captured link can open another allowed local
 same pane; fragment links scroll within the page. Back or Backspace returns to the previous page.
 Remote items retain the existing text preview and local-copy rules. When the browser binary or
 rendering is unavailable, a brief note accompanies the existing HTML TextView preview. The tiles
-are images; with the default Space setting, Space from the list opens the selectable, searchable
-browser viewer.
+are images; Enter in the preview window opens the selectable, searchable browser viewer.
 
-By default, Space on a local Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`), HTML (`.html`, `.htm`, `.xhtml`), PDF (`.pdf`), video (`.mp4`, `.m4v`, `.webm`, `.mov`), glTF (`.glb`, `.gltf`) or browser image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`, `.heic`, `.heif`, `.bmp`) item opens or updates one local viewer surface. In the list's `f` menu, **Space preview → System preview** routes these types to the platform handler instead (Quick Look, GNOME Sushi, QuickLook or PowerToys Peek). Herdr stores the choice at `readlist.space_preview` in its live `settings.json`; `builtin` is the default and `system` selects the platform. Each Space press reads that value, so edits apply without a restart and every copy uses the same choice. TIFF and PSD always retain the platform handler. The person's opted-in Space handler retains first choice. The viewer needs Node.js 20 or newer and a browser. The launcher uses a Chrome app window on macOS when installed, an Edge app window on Windows when installed, or a Chromium app window on Linux when installed; otherwise it opens the system browser URL. If launch fails, Space shows the existing native in-pane preview. A platform handler that passes also falls back to the in-pane preview. Enter continues to reveal executable files and application bundles according to `core/items.js`; opening the viewer neither marks an item read nor changes Enter.
+By default, Space on a local video (`.mp4`, `.m4v`, `.webm`, `.mov`) or glTF (`.glb`, `.gltf`) item opens or updates one local viewer surface, and Space on Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`), HTML (`.html`, `.htm`, `.xhtml`), PDF (`.pdf`) or a browser image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`, `.heic`, `.heif`, `.bmp`) opens the preview window above, whose Enter opens the same surface. In the list's `f` menu, **Space preview → System preview** routes these types to the platform handler instead (Quick Look, GNOME Sushi, QuickLook or PowerToys Peek). Herdr stores the choice at `readlist.space_preview` in its live `settings.json`; `builtin` is the default and `system` selects the platform. Each Space press reads that value, so edits apply without a restart and every copy uses the same choice. TIFF and PSD always retain the platform handler. The person's opted-in Space handler retains first choice. The viewer needs Node.js 20 or newer and a browser. The launcher uses a Chrome app window on macOS when installed, an Edge app window on Windows when installed, or a Chromium app window on Linux when installed; otherwise it opens the system browser URL. If launch fails, Space shows the existing native in-pane preview. A platform handler that passes also falls back to the in-pane preview. Enter continues to reveal executable files and application bundles according to `core/items.js`; opening the viewer neither marks an item read nor changes Enter.
 
 Markdown is rendered by locally bundled Marked with GFM headings, lists, tables, task lists, links, images and fenced code blocks. Raw HTML is escaped and shown as text. Code blocks retain their language class but do not use a separate syntax-highlighting runtime. The output loads in the same scriptless, sandboxed frame as HTML. Relative links and images are included only when the resolved real file stays below the selected Markdown file's real parent folder and fits the document manifest limits. Linked Markdown pages are rendered by the same route. Remote URLs, data URLs, missing files and path escapes are rendered without active links or images. `rl preview --browser` uses this route too; its native `--pane` preview remains available when the browser viewer cannot open.
 
@@ -104,7 +128,9 @@ The selected HTML or rendered Markdown document is untrusted. It loads inside `<
 | Markdown headings, tables, task lists, local images and links | Rendered inside the sandboxed frame; only manifest files load | Same | Same |
 | Markdown raw HTML, remote resources and escaping references | Raw HTML escaped; remote and escaping references inert | Same | Same |
 | No Node or browser | Native TextView fallback | Same | Same |
-| Repeated Space and a different HTML selection | One reused viewer surface | Same | Same |
+| Repeated open and a different HTML selection | One viewer window: a new one in front, the old one closes | One reused viewer surface | One reused viewer surface |
+| Viewer window or Quick Look closes while it is the active app | Herdr is active again; not after a switch elsewhere | Not handled | Not handled |
+| Space on Markdown, HTML, PDF or an image | Herdr preview window with tiles; Enter opens the viewer | Same | Same |
 | PDF pages, zoom, find and copy | Bundled PDF.js in reused surface | Same | Same |
 | Video seek and unsupported codec | Byte ranges; native controls or default-app fallback | Same | Same |
 | Browser still image and inert SVG | Fit, actual size, zoom, pan, rotate; SVG cannot run scripts | Same | Same |

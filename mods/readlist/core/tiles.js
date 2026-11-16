@@ -16,11 +16,13 @@ export function darkBackground(color) {
   return (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000 < 128;
 }
 
-export function tileFallback(error) {
-  if (/Chrome, Chromium, or Edge was not found/.test(error ?? "")) return "Chrome, Chromium, or Edge is unavailable. Showing the text preview.";
-  if (/WebSocket is not defined/.test(error ?? "")) return "Node.js lacks WebSocket support. Showing the text preview.";
-  if (/\bnode\b.*(?:not found|ENOENT)|ENOENT.*\bnode\b/i.test(error ?? "")) return "Node.js is unavailable. Showing the text preview.";
-  return "HTML rendering failed. Showing the text preview.";
+// Why tiles are missing. `kind` is "html", "markdown" or "pdf"; a PDF has no text preview.
+export function tileFallback(error, kind = "html") {
+  const then = kind === "pdf" ? "Enter opens the interactive viewer." : "Showing the text preview.";
+  if (/Chrome, Chromium, or Edge was not found/.test(error ?? "")) return `Chrome, Chromium, or Edge is unavailable. ${then}`;
+  if (/WebSocket is not defined/.test(error ?? "")) return `Node.js lacks WebSocket support. ${then}`;
+  if (/\bnode\b.*(?:not found|ENOENT)|ENOENT.*\bnode\b/i.test(error ?? "")) return `Node.js is unavailable. ${then}`;
+  return `${kind === "pdf" ? "PDF" : kind === "markdown" ? "Markdown" : "HTML"} rendering failed. ${then}`;
 }
 
 export function tileSlots(result, offset, view) {

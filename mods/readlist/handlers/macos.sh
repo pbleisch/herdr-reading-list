@@ -15,22 +15,48 @@
 set -u
 action=${1-}
 
-# JavaScript for osascript: activates the app with pid argv[0] once it has a window on screen,
-# checking every 50 ms for up to 3 s.
+# JavaScript for osascript: activates the Quick Look process (pid argv[0]) once it has a
+# window on screen, checking every 50 ms for up to 3 s. Then it waits for the panel to close:
+# macOS would front another app's window then, so when the panel was the front window until
+# it closed, the app Space was pressed in (Herdr) is activated again. A switch to another app
+# while the panel is open is left alone. The active app is asked of NSWorkspace, whose answer
+# stays current only while the script's run loop runs, so the script waits by running it.
 front='ObjC.import("AppKit"); ObjC.import("CoreGraphics");
+function frontPid() {
+	const app = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+	return app.isNil() ? 0 : Number(app.processIdentifier);
+}
+function wait(seconds) {
+	$.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(seconds));
+}
+function running(pid) {
+	const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
+	return !app.isNil() && !app.terminated;
+}
+function activate(pid) {
+	const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
+	if (!app.isNil()) app.activateWithOptions(0);
+}
 function run(argv) {
 	const pid = Number(argv[0]);
-	for (let i = 0; i < 60; i++) {
+	const back = frontPid();
+	let shown = false;
+	for (let i = 0; i < 60 && !shown; i++) {
 		const ws = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0));
-		for (let j = 0; j < ws.count; j++) {
+		for (let j = 0; j < ws.count && !shown; j++) {
 			const w = ws.objectAtIndex(j);
-			if (ObjC.unwrap(w.objectForKey("kCGWindowOwnerPID")) !== pid || ObjC.unwrap(w.objectForKey("kCGWindowLayer")) !== 0) continue;
-			const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
-			if (!app.isNil()) app.activateWithOptions(0);
-			return;
+			shown = ObjC.unwrap(w.objectForKey("kCGWindowOwnerPID")) === pid && ObjC.unwrap(w.objectForKey("kCGWindowLayer")) === 0;
 		}
-		delay(0.05);
+		if (!shown) wait(0.05);
 	}
+	if (!shown) return;
+	activate(pid);
+	let last = true;
+	while (running(pid)) {
+		last = frontPid() === pid;
+		wait(0.2);
+	}
+	if (last && back && back !== pid && running(back)) activate(back);
 }'
 
 case $action in
@@ -50,8 +76,9 @@ preview)
 	echo $q
 	# qlmanage does not come to the front by itself, so its panel opens behind Herdr: once
 	# its window is on screen (within 3 s), it is made the active app, as an app opened from
-	# Finder would be. NSRunningApplication sends no Apple Events, so there is no
-	# Automation or Accessibility prompt. In the background, so the token is not held up.
+	# Finder would be, and when it closes Herdr is made active again (see $front).
+	# NSRunningApplication sends no Apple Events, so there is no Automation or Accessibility
+	# prompt. In the background, so the token is not held up.
 	osascript -l JavaScript -e "$front" "$q" >/dev/null 2>&1 </dev/null &
 	;;
 preview-close)

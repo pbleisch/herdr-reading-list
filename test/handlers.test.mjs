@@ -444,6 +444,19 @@ test("macOS: preview brings the Quick Look panel to the front without holding up
   assert.match(script, /runningApplicationWithProcessIdentifier\(pid\)/);
   assert.match(script, /activateWithOptions/);
   assert.doesNotMatch(script, /System Events|Application\(/, "no Apple Events, so no Automation prompt");
+  // When the panel closes while it is in front, the app Space was pressed in comes back.
+  assert.match(script, /const back = frontPid\(\)/);
+  assert.match(script, /runUntilDate/, "NSWorkspace answers stay current only while the run loop runs");
+  assert.match(script, /while \(running\(pid\)\)/);
+  assert.match(script, /if \(last && back && back !== pid && running\(back\)\) activate\(back\)/);
+});
+
+test("macOS: the Quick Look script compiles and returns when no panel shows", { skip: process.platform !== "darwin" }, () => {
+  const text = readFileSync(MACOS, "utf8");
+  const script = text.slice(text.indexOf("front='") + 7, text.indexOf("}'\n") + 1);
+  // A pid with no window: it waits its 3 s for the panel, then gives up without activating.
+  const r = spawnSync("osascript", ["-l", "JavaScript", "-e", script, "999999"], { encoding: "utf8", timeout: 10000 });
+  assert.equal(r.status, 0, r.stderr);
 });
 
 test("macOS: preview still gives its token when osascript is missing", posix, () => {

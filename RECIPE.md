@@ -5,8 +5,9 @@ A list of files and links that agents and tools put up for the person to read. A
 it is, the note and who added it. The person walks the list with the keyboard, sees a preview of
 the selected item beside the list (rendered markdown, local HTML drawn as image tiles, highlighted
 code, images, a poster of a glTF model, and on macOS Quick Look thumbnails of PDF), looks at it
-closer with Space (a built-in viewer in the browser for Markdown, HTML, PDF, video, images and
-glTF models, else the platform's preview window), opens it in its default app with Enter, browses
+closer with Space (a preview window inside Herdr showing the rendered Markdown, HTML, PDF or
+image, with Enter there for the interactive built-in viewer in the browser; the browser viewer
+straight away for video and glTF models; else the platform's preview window), opens it in its default app with Enter, browses
 a folder item's contents in the list, and marks it done. Agents on
 other machines Herdr reaches add to that machine's own list, which shows here too: their files
 are previewed in place or fetched into a local copy to open. When the person turns it on, files
@@ -23,10 +24,12 @@ running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shi
 | Linux | Supported: `xdg-open`, the file manager through the freedesktop `FileManager1` D-Bus call (`gdbus`), else `xdg-open` on the folder; the Space preview window needs GNOME Sushi, else the in-pane preview; no thumbnails (other types show their icon). |
 | Windows | Supported, with PowerShell 7 (`pwsh`): the default app (the shell's association), Explorer (`explorer /select,`), the Space preview window in the QuickLook app or PowerToys Peek when installed, else the in-pane preview; images drawn in the pane, other types show their icon. `rl` is `rl.ps1` (with `rl.cmd` and a Git Bash shim); the list lives in `%LOCALAPPDATA%\reading-list`. |
 
-On all three, Space on Markdown, HTML, PDF, video, a common image or a glTF model opens the
-built-in viewer in the browser instead (it needs Node.js 20 or newer and a browser), unless the
-person chose "System preview" in the `f` menu; without Node or a browser it falls back to the
-in-pane preview.
+On all three, Space on Markdown, HTML, PDF or a common image opens the preview window inside
+Herdr instead, and Space on video or a glTF model the built-in viewer in the browser (it needs
+Node.js 20 or newer and a browser), unless the person chose "System preview" in the `f` menu;
+without Node or a browser the window shows the text preview and the browser viewer falls back to
+the in-pane preview. On macOS, closing the browser viewer or the Quick Look panel while it is the
+active app makes Herdr active again.
 
 Each action (open, reveal, the Space preview window, thumbnails) is a handler, a program run with
 the item as a separate argument: one built in per platform, and in front of it, only once the
@@ -97,8 +100,9 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - **Keys** (while the list has the keyboard; a click on it gives it the keyboard): click or
   `j`/`k`/arrows/`g`/`G`/Home/End select (selecting never opens); Enter or a double-click opens in
   the default app and marks read (the popup then closes), and on a folder item browses it in the
-  list (see "Folders"); Space on Markdown, HTML, PDF, video, a common image or a glTF model opens
-  the built-in viewer in the browser (see "Built-in viewer"; Space again on that item clears it),
+  list (see "Folders"); Space on Markdown, HTML, PDF or a common image opens the preview window
+  (see "Preview window"; Space again on that item closes it), on video or a glTF model the
+  built-in viewer in the browser (see "Built-in viewer"; Space again on that item clears it),
   and on anything else, or on those too once the person chose "System preview", toggles the macOS
   Quick Look panel
   (brought to the front as the active app), on Linux GNOME Sushi (doesn't mark read; without Sushi it shows or hides the in-pane preview as
@@ -156,14 +160,31 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   setting, and toasts the new choice. Absent or unreadable is `builtin`. Every Space press reads
   the file again, so the choice (or an edit by hand) applies at once and to every copy. It only
   switches the types the built-in viewer covers; the person's own handler is still asked first.
-- **Built-in viewer** (`viewer/`, see `docs/viewer-contract.md`): Space runs
+- **Preview window** (`docs/design.md` 4.8): Space on Markdown, HTML, PDF or a common image opens
+  the mod itself as an overlay window (`openOverlay({kind: "window", key: "readlist-preview",
+  width: 820, height: 0.85, props: {role: "window", file, title, source}})`; a remote item's
+  fetched copy as `file`). It draws Markdown, HTML and PDF as tiles with `viewer/render.mjs`
+  (below; a PDF through the host's trusted `pages` view, its first 100 pages, canvases drawn
+  only around the tile being captured) and images with the pane's image controls. It focuses
+  itself: Esc and Space close it, Enter (and an "Enter · Interactive" button) runs the built-in
+  viewer on the file and closes the window, the wheel and the viewer pane's scroll keys scroll
+  it, Backspace returns from a followed local link. Only its title bar drags it.
+  `shared("readlist.window")` (`{overlay, id, copy}`) lets the list toggle it (Space again on
+  its item), show another item in it, or close it before another kind of preview; when it
+  closes it records whether it had the keyboard, and the list that opened it takes it back.
+- **Built-in viewer** (`viewer/`, see `docs/viewer-contract.md`): Space on video or glTF, and
+  Enter in the preview window, run
   `node viewer/host.mjs open <appHome()/readlist/viewer> <absolute file>`. That starts (or
   reuses) a detached `host.mjs serve` process: an HTTP server on `127.0.0.1` only, a random port,
   a random 256-bit token as the first path part, port, token, pid and build hash in a user-only
   `session.json`. A host whose build hash differs from the installed files is stopped (after
   checking its pid's command) and replaced. It opens one browser surface (a Chrome app window on
   macOS, Edge on Windows, Chromium on Linux when installed, else the default browser) and reuses
-  it for later items. The shell page shows Markdown (rendered by the bundled Marked, raw HTML as
+  it for later items, except on macOS with Chrome, where every open launches a new app window in
+  front (`raise`) and the older page closes itself once the host says a newer page spoke. On
+  macOS the launcher records the active app's pid before launching (`returnTo`); when the viewer
+  page says goodbye and none says hello within 600 ms, the host activates that app if Chrome is
+  still the active one (`osascript -l JavaScript`, `NSRunningApplication`, no Apple Events). The shell page shows Markdown (rendered by the bundled Marked, raw HTML as
   text) and HTML in a sandboxed, scriptless frame that can load only the local files the document
   refers to below its own folder (at most 256 files, 64 MiB, 16 MiB each); PDF with the bundled
   PDF.js (pages, zoom, search, copy; no PDF scripts); video with the browser's controls and byte
@@ -171,7 +192,8 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   Three.js (orbit, pan, zoom, reset). Nothing comes from a CDN. When `node` or the browser fails,
   a toast says why and the in-pane preview shows instead. Another machine's item uses its fetched
   copy.
-- **HTML tiles**: for a local HTML item the preview runs `node viewer/render.mjs` with the file,
+- **HTML tiles**: for a local HTML item the preview (and for Markdown, HTML and PDF the preview
+  window) runs `node viewer/render.mjs` with the file,
   the cache folder, the pane's width, scale 2 and light or dark (from `theme().background`). It
   serves the page through the same host rules to a headless Chrome, Chromium or Edge with scripts
   and network off, and saves 512-high PNG tiles, the ones on screen first, updating a progress
@@ -373,6 +395,11 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   process frontmost would ask for Automation consent). Handing the focus back to Herdr puts
   Herdr's window over the panel again, so the panel stays the active app until it closes. macOS
   honours the activation only while Herdr is the frontmost app, which it is when Space is pressed.
+  The same script then waits for the panel to close; if it was the active app until then, it
+  activates the app Space was pressed in, or macOS fronts some other app's window. It asks
+  `NSWorkspace.frontmostApplication`, which stays current only while the script runs its run loop
+  (`NSRunLoop.runUntilDate`, not `delay`); the window order is no guide, since with several
+  displays the panel stays the top window of its own display while another app is active.
 - Every shown copy gets every `readlist.<command>`; without the "keyboard owner" in shared state,
   `j` would move every copy at once. Commands reach shown copies only.
 - Several copies see the same arrival: claim in shared state and toast only what is still yours

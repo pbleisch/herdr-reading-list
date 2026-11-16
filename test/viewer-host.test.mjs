@@ -7,8 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { createHost, gltfManifestFor } from "../mods/readlist/viewer/host.mjs";
-import { browserViewerType, spacePreviewRoute, viewerFailureNotice } from "../mods/readlist/core/browser-viewer.js";
+import { createHost, gltfManifestFor, RETURN_DELAY_MS } from "../mods/readlist/viewer/host.mjs";
+import { browserViewerType, spacePreviewRoute, viewerFailureNotice, windowAction, windowPlan, pagesNote } from "../mods/readlist/core/browser-viewer.js";
 import { folderItems } from "../mods/readlist/core/folder.js";
 import { typeOf } from "../mods/readlist/core/items.js";
 import { fitScale, clampZoom, rotateQuarter, installImageControls } from "../mods/readlist/viewer/image-controls.js";
@@ -244,7 +244,7 @@ test("PDF and video route only the selected file and support byte ranges", async
 
   assert.equal((await select(path.join(dir, "sample.pdf"))).status, 200);
   assert.deepEqual(await (await get("state")).json(), {
-    revision: 1, title: "sample.pdf", kind: "pdf", document: "document/sample.pdf",
+    revision: 1, title: "sample.pdf", kind: "pdf", document: "document/sample.pdf", superseded: false,
   });
   const pdf = await get("document/sample.pdf", { headers: { Range: "bytes=2-5" } });
   assert.equal(pdf.status, 206);
@@ -301,15 +301,89 @@ test("browser routing covers models and decodable images while retaining native-
 });
 
 test("Space routes covered types according to the preview setting, leaving other types with the system", () => {
-  for (const file of ["page.md", "page.html", "page.pdf", "clip.mp4", "model.glb", "photo.png"]) {
+  // Pages and images open in the Herdr preview window; video and models in the browser.
+  for (const [file, route] of [["page.md", "window"], ["page.html", "window"], ["page.pdf", "window"], ["photo.png", "window"],
+    ["clip.mp4", "browser"], ["model.glb", "browser"], ["scene.gltf", "browser"]]) {
     const item = { path: `/items/${file}` };
-    assert.equal(spacePreviewRoute(item, "builtin"), "browser", file);
+    assert.equal(spacePreviewRoute(item, "builtin"), route, file);
     assert.equal(spacePreviewRoute(item, "system"), "system", file);
   }
   for (const item of [{ path: "/items/report.txt" }, { path: "/items/photo.tiff" }, { url: "https://example.com" }]) {
     assert.equal(spacePreviewRoute(item, "builtin"), "system");
     assert.equal(spacePreviewRoute(item, "system"), "system");
   }
+});
+
+test("the preview window: Esc and Space close it, Enter goes interactive, Space toggles it from the list", () => {
+  assert.equal(windowAction("escape"), "close");
+  assert.equal(windowAction("space"), "close");
+  assert.equal(windowAction("enter"), "interactive");
+  for (const k of ["j", "down", "pagedown", "shift-space", "backspace"]) assert.equal(windowAction(k), null, k);
+  const open = { overlay: "o1", id: "item-a" };
+  assert.equal(windowPlan(null, "item-a", "window"), null);
+  assert.equal(windowPlan({ overlay: null, closed: "o1" }, "item-a", "window"), null);
+  assert.equal(windowPlan(open, "item-a", "window"), "toggle");
+  assert.equal(windowPlan(open, "item-b", "window"), "replace");
+  assert.equal(windowPlan(open, "item-a", "browser"), "close");
+  assert.equal(windowPlan(open, "item-b", "system"), "close");
+  assert.equal(pagesNote({ pages: 12, shown: 12 }), null);
+  assert.equal(pagesNote(null), null);
+  assert.match(pagesNote({ pages: 412, shown: 100 }), /first 100 of 412 pages/);
+});
+
+test("a newer viewer window supersedes the old one, and closing the viewer hands focus back once", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "readlist-viewer-focus-"));
+  const returned = [];
+  const host = await createHost({ returnFocus: (pid, bundle) => { returned.push([pid, bundle]); return "returned"; } });
+  t.after(async () => {
+    await new Promise((resolve) => host.server.close(resolve));
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  await fs.writeFile(path.join(dir, "a.html"), "<p>a</p>");
+  const post = (route, body) => fetch(host.base + route, { method: "POST", headers: { "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  const state = async (client) => (await fetch(`${host.base}state?client=${client}`)).json();
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const settle = () => wait(RETURN_DELAY_MS + 200);
+
+  // The first open launches; a second open within the heartbeat window reuses the surface,
+  // unless it asks to raise it (a window behind others cannot come forward by itself).
+  assert.equal((await (await post("select", { file: path.join(dir, "a.html"), returnTo: 4242 })).json()).launch, true);
+  assert.equal((await post("heartbeat?client=one")).status, 204);
+  assert.equal((await (await post("select", { file: path.join(dir, "a.html"), returnTo: 4242 })).json()).launch, false);
+  assert.equal((await (await post("select", { file: path.join(dir, "a.html"), returnTo: 4242, raise: true })).json()).launch, true);
+  assert.equal((await post("surface", { bundle: "com.google.Chrome" })).status, 204);
+
+  // The raised window speaks (its first request is for the state, before any heartbeat):
+  // it is the viewer now, and the older one is told it was superseded.
+  assert.equal((await state("two")).superseded, false);
+  assert.equal((await state("one")).superseded, true);
+  await post("heartbeat?client=two");
+  assert.equal((await state("two")).superseded, false);
+  // The old window closing is not the viewer going away.
+  await post("goodbye?client=one");
+  await settle();
+  assert.deepEqual(returned, []);
+  // A reload says goodbye and hello again: nothing to hand back.
+  await post("goodbye?client=two");
+  await post("heartbeat?client=three");
+  await settle();
+  assert.deepEqual(returned, []);
+  // The viewer window closes: the app it was opened from gets the keyboard back.
+  await post("goodbye?client=three");
+  await settle();
+  assert.deepEqual(returned, [[4242, "com.google.Chrome"]]);
+
+  // Without a known surface (the system browser) or a return app, nothing is handed back.
+  await post("surface", { bundle: null });
+  await post("heartbeat?client=four");
+  await post("goodbye?client=four");
+  await post("surface", { bundle: "com.google.Chrome" });
+  await post("select", { file: path.join(dir, "a.html") });
+  await post("heartbeat?client=five");
+  await post("goodbye?client=five");
+  await settle();
+  assert.equal(returned.length, 1);
+  assert.equal((await post("surface", { bundle: "not a bundle id" })).status, 204);
 });
 
 test("image fit, bounded zoom and quarter-turn controls", () => {

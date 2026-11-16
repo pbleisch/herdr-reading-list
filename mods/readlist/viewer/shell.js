@@ -10,7 +10,9 @@ const imageToolbar = $("image-toolbar"), modelToolbar = $("model-toolbar");
 const imageControls = installImageControls(imageStage, stillImage,
   [$("image-fit"), $("image-actual"), $("image-minus"), $("image-plus"), $("image-rotate"), $("image-zoom")]);
 const base = new URL("./", location.href);
-let revision = -1, generation = 0, renderSequence = 0, searchRun = 0, refreshing = false;
+let revision = -1, generation = 0, renderSequence = 0, searchRun = 0, refreshing = false, retired = false;
+// This page's name for the host: a newer viewer window supersedes this one.
+const client = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
 let modelSession = null;
 let pdfjs, pdf, loadingTask, renderTask, page = 1, zoom = 1;
 let pageText = "", matches = [], matchIndex = -1, searchQuery = "";
@@ -24,6 +26,12 @@ function show(element) {
 
 function status(text) { message.textContent = text; show(message); }
 function url(route) { return new URL(route, base); }
+function named(route) { return url(`${route}?client=${client}`); }
+// Replacing the frame's page adds no history entry: a window whose history holds one page
+// may close itself when a newer viewer window takes over.
+function frameTo(href) {
+  try { frame.contentWindow.location.replace(href); } catch { frame.src = href; }
+}
 
 function clearCurrent() {
   generation++;
@@ -45,7 +53,7 @@ function clearCurrent() {
   modelSession = null;
   modelStage.dataset.ready = "";
   frame.onerror = null;
-  frame.src = "about:blank";
+  frameTo("about:blank");
   poster.hidden = true;
   unsupported.querySelector("p").textContent = "This browser cannot play this video format.";
   textLayer.replaceChildren();
@@ -171,7 +179,7 @@ async function applyState(state) {
       if (selected !== generation) return;
       if (!response.ok || !response.headers.get("content-type")?.startsWith("text/html")) return failed();
       frame.onerror = failed;
-      frame.src = documentUrl.href;
+      frameTo(documentUrl.href);
       return show(frame);
     } catch { return failed(); }
   }
@@ -216,17 +224,24 @@ async function nextMatch() {
 }
 
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing || retired) return;
   refreshing = true;
   try {
-    const response = await fetch(url("state"), { cache: "no-store" });
+    const response = await fetch(named("state"), { cache: "no-store" });
     if (!response.ok) throw new Error("The viewer host is unavailable.");
     const state = await response.json();
+    if (state.superseded) {
+      retired = true;
+      clearCurrent();
+      status("This preview moved to a newer window.");
+      window.close();
+      return;
+    }
     if (state.revision !== revision) {
       revision = state.revision;
       applyState(state).catch(() => { if (revision === state.revision) status("Could not display this item."); });
     }
-    await fetch(url("heartbeat"), { method: "POST", cache: "no-store" });
+    await fetch(named("heartbeat"), { method: "POST", cache: "no-store" });
   } catch { status("The viewer host is unavailable. Use the preview in Herdr."); }
   finally { refreshing = false; }
 }
@@ -255,4 +270,4 @@ $("open-default").onclick = async () => {
 
 refresh();
 setInterval(refresh, 1000);
-addEventListener("pagehide", () => navigator.sendBeacon(url("goodbye")));
+addEventListener("pagehide", () => navigator.sendBeacon(named("goodbye")));

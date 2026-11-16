@@ -1,16 +1,31 @@
-// HTML-to-tiles renderer. The viewer host supplies the exact same asset manifest and
-// document CSP as the browser viewer. Progress is published after each complete PNG.
+// HTML, Markdown and PDF to tiles. The viewer host supplies the exact same asset manifest
+// and document CSP as the browser viewer; a PDF is drawn by the host's trusted pages view
+// (pages.js, bundled PDF.js). Progress is published after each complete PNG.
 import { spawn } from "node:child_process";
 import { promises as fs, constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHost, manifestFor } from "./host.mjs";
+import { createHost, manifestFor, markdownManifestFor } from "./host.mjs";
 import { CACHE_LIMIT, cacheKey, mapCapturedLinks, pruneCache, touchEntry } from "./tile-cache.mjs";
 import { tileCaptureOrder } from "../core/tiles.js";
 
 const TILE = 512;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const tick = () => Number(process.hrtime.bigint()) / 1e6;
+
+// What a file renders as, from its extension; null when it has no tiles.
+export function tileKind(file) {
+  const extension = path.extname(file).toLowerCase();
+  if ([".html", ".htm", ".xhtml"].includes(extension)) return "html";
+  if ([".md", ".markdown", ".mdown", ".mkd"].includes(extension)) return "markdown";
+  return extension === ".pdf" ? "pdf" : null;
+}
+
+async function filesFor(selected, kind) {
+  if (kind === "html") return (await manifestFor(selected)).files;
+  if (kind === "markdown") return (await markdownManifestFor(selected)).files;
+  return new Map([[path.basename(selected), { target: selected, mime: "application/pdf" }]]);
+}
 
 export async function browserBinary() {
   const candidates = process.platform === "darwin"
@@ -86,8 +101,10 @@ export async function chromeReady(profile, child) {
 async function run(file, output, width, scale, dark, progress, priority = 0, force = false) {
   const start = tick();
   const selected = await fs.realpath(file);
-  const allowlist = await manifestFor(selected);
-  const key = await cacheKey(selected, allowlist.files, width, scale, dark);
+  const kind = tileKind(selected);
+  if (!kind) throw new Error("Unsupported tile type");
+  const files = await filesFor(selected, kind);
+  const key = await cacheKey(selected, files, width, scale, dark);
   const dir = path.join(output, key);
   const manifestPath = path.join(dir, "manifest.json");
   if (!force) {
@@ -108,7 +125,7 @@ async function run(file, output, width, scale, dark, progress, priority = 0, for
   let child, cdp, profile;
   try {
     const selection = await fetch(host.base + "select", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file: selected }) });
-    if (!selection.ok) throw new Error("The viewer host refused the selected HTML file");
+    if (!selection.ok) throw new Error("The viewer host refused the selected file");
     const state = await (await fetch(host.base + "state")).json();
     profile = await fs.mkdtemp(path.join(os.tmpdir(), "readlist-render-"));
     child = spawn(chrome, ["--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-extensions", "--disable-gpu", "--remote-debugging-port=0", `--user-data-dir=${profile}`, `--window-size=${width},900`, "about:blank"], { stdio: "ignore" });
@@ -118,8 +135,12 @@ async function run(file, output, width, scale, dark, progress, priority = 0, for
     await cdp.send("Runtime.enable");
     await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: scale, mobile: false });
     await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] });
-    await cdp.send("Page.navigate", { url: new URL(state.document, host.base).href });
-    const ready = await cdp.eval(`(async () => {
+    await cdp.send("Page.navigate", { url: kind === "pdf" ? host.base + "pages" : new URL(state.document, host.base).href });
+    const ready = kind === "pdf" ? await cdp.eval(`(async () => {
+      for (let i = 0; i < 200 && !window.readlistPages; i++) await new Promise(resolve => setTimeout(resolve, 25));
+      if (!window.readlistPages) throw new Error("The PDF view did not load");
+      return { ...await window.readlistPages.ready, links: [] };
+    })()`, true) : await cdp.eval(`(async () => {
       if (document.readyState !== "complete") await new Promise(resolve => addEventListener("load", resolve, {once:true}));
       await document.fonts.ready;
       await Promise.all(Array.from(document.images, image => image.complete ? Promise.resolve() : new Promise(resolve => { image.onload = resolve; image.onerror = resolve; })));
@@ -134,15 +155,17 @@ async function run(file, output, width, scale, dark, progress, priority = 0, for
         })
       };
     })()`, true);
-    const links = mapCapturedLinks(ready.links, host.base + "document/", allowlist.files);
+    const links = mapCapturedLinks(ready.links, host.base + "document/", files);
     const tiles = [];
     let firstTileMs = null;
     let cacheBytes = 0;
-    const current = () => ({ requested: file, source: selected, key, width, scale, dark, height: ready.height, tiles, links });
+    const pages = kind === "pdf" ? { pages: ready.pages, shown: ready.shown } : {};
+    const current = () => ({ requested: file, source: selected, kind, key, width, scale, dark, height: ready.height, tiles, links, ...pages });
     await publish(progress, current());
     for (const index of tileCaptureOrder(ready.height, priority)) {
       const y = index * TILE;
       const height = Math.min(TILE, ready.height - y);
+      if (kind === "pdf") await cdp.eval(`window.readlistPages.draw(${y}, ${height})`, true);
       const shot = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip: { x: 0, y, width, height, scale: 1 } });
       const name = `tile-${String(index).padStart(3, "0")}.png`;
       await fs.writeFile(path.join(dir, name), Buffer.from(shot.data, "base64"));
@@ -175,7 +198,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url
   const [file, output, rawWidth, rawScale = "2", mode = "light", progress = "", rawPriority = "0", force = ""] = process.argv.slice(2);
   const width = Number(rawWidth), scale = Number(rawScale), priority = Number(rawPriority);
   if (!file || !output || !path.isAbsolute(file) || !path.isAbsolute(output) || (progress && !path.isAbsolute(progress)) || !Number.isInteger(width) || width < 120 || width > 2000 || ![1, 2, 3].includes(scale) || !["light", "dark"].includes(mode) || !Number.isFinite(priority) || priority < 0) {
-    console.error("Expected ABSOLUTE_HTML_FILE ABSOLUTE_CACHE_DIR WIDTH [SCALE=2] [light|dark] [ABSOLUTE_PROGRESS_FILE] [PRIORITY_Y=0] [--force]");
+    console.error("Expected ABSOLUTE_HTML_MARKDOWN_OR_PDF_FILE ABSOLUTE_CACHE_DIR WIDTH [SCALE=2] [light|dark] [ABSOLUTE_PROGRESS_FILE] [PRIORITY_Y=0] [--force]");
     process.exitCode = 2;
   } else {
     run(file, output, width, scale, mode === "dark", progress, priority, force === "--force")

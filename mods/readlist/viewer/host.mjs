@@ -33,7 +33,45 @@ const MAX_TOTAL = 64 * 1024 * 1024;
 const SHELL_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src 'self'; worker-src 'self'; img-src 'self' data: blob:; media-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'";
 const DOCUMENT_CSP = "default-src 'none'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; media-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'";
 const runFile = promisify(execFile);
-const BUILD_FILES = ["host.mjs", "shell.html", "shell.css", "shell.js", "markdown.mjs", "marked/marked.esm.js", "image-controls.js", "gltf-view.js", "pdfjs/pdf.min.mjs", "pdfjs/pdf.worker.min.mjs", ...THREE_FILES].map((name) => THREE_FILES.has(name) ? `three/${name}` : name);
+const BUILD_FILES = ["host.mjs", "shell.html", "shell.css", "shell.js", "pages.html", "pages.js", "markdown.mjs", "marked/marked.esm.js", "image-controls.js", "gltf-view.js", "pdfjs/pdf.min.mjs", "pdfjs/pdf.worker.min.mjs", ...THREE_FILES].map((name) => THREE_FILES.has(name) ? `three/${name}` : name);
+// The browser whose app window shows the viewer on macOS.
+export const CHROME_BUNDLE = "com.google.Chrome";
+const CHROME_APP = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+// After the viewer window closes, macOS keeps its browser active and fronts another of its
+// windows. The host gives the keyboard back to the app the preview was opened from, only
+// while the browser is still the frontmost app, so a deliberate switch elsewhere stands.
+// NSRunningApplication sends no Apple Events, so there is no Automation prompt.
+const FRONT_APP = `ObjC.import("AppKit");
+function run() {
+  const app = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+  return app.isNil() ? "" : JSON.stringify({ pid: Number(app.processIdentifier), bundle: ObjC.unwrap(app.bundleIdentifier) ?? null });
+}`;
+const RETURN_FOCUS = `ObjC.import("AppKit");
+function run(argv) {
+  const front = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+  if (front.isNil() || ObjC.unwrap(front.bundleIdentifier) !== argv[1]) return "stay";
+  const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
+  if (app.isNil() || app.terminated) return "gone";
+  app.activateWithOptions(0);
+  return "returned";
+}`;
+// A closing page says goodbye; a reload says hello again within this time.
+export const RETURN_DELAY_MS = 600;
+
+export async function frontmostApp() {
+  if (process.platform !== "darwin") return null;
+  try {
+    const { stdout } = await runFile("osascript", ["-l", "JavaScript", "-e", FRONT_APP], { timeout: 3000 });
+    const app = JSON.parse(stdout);
+    return Number.isSafeInteger(app?.pid) && app.pid > 0 ? app : null;
+  } catch { return null; }
+}
+
+async function returnFocusMac(pid, bundle) {
+  if (process.platform !== "darwin") return "stay";
+  const { stdout } = await runFile("osascript", ["-l", "JavaScript", "-e", RETURN_FOCUS, String(pid), bundle], { timeout: 3000 });
+  return stdout.trim();
+}
 
 async function buildIdentity() {
   const hash = createHash("sha256");
@@ -259,13 +297,28 @@ async function bodyJson(req) {
   return JSON.parse(body);
 }
 
-export async function createHost({ token = randomBytes(32).toString("hex"), port = 0 } = {}) {
+// `returnFocus(pid, bundle)` gives the keyboard back after the viewer window closes (macOS).
+export async function createHost({ token = randomBytes(32).toString("hex"), port = 0, returnFocus = returnFocusMac } = {}) {
   const build = await buildIdentity();
   let current = null, revision = 0, clientAt = 0, launchedAt = 0;
+  // Each viewer page names itself. The page that first spoke last is the viewer; an older
+  // window is told it was superseded and closes, so only one viewer window stays.
+  // `returnTo` is the app the last selection came from, `surface` the browser app showing it.
+  const clients = new Map();
+  let newest = null, returnTo = null, surface = null;
+  // A page's first request of any kind makes it the newest: a new window asks for the state
+  // before its first heartbeat, and must not be told an older window replaced it.
+  const meet = (client) => {
+    if (!client || clients.has(client)) return;
+    clients.set(client, Date.now());
+    newest = client;
+    while (clients.size > 16) clients.delete(clients.keys().next().value);
+  };
   const server = createServer(async (req, res) => {
     const host = `127.0.0.1:${server.address().port}`;
     if (req.headers.host !== host) return send(res, 403);
-    const raw = (req.url ?? "").split("?")[0];
+    const [raw = "", search = ""] = (req.url ?? "").split("?");
+    const client = new URLSearchParams(search).get("client");
     const prefix = `/${token}/`;
     if (!raw.startsWith(prefix)) return send(res, 404);
     const route = raw.slice(prefix.length);
@@ -274,11 +327,34 @@ export async function createHost({ token = randomBytes(32).toString("hex"), port
       if (route === "version" && req.method === "GET") return send(res, 200, JSON.stringify({ build, pid: process.pid }), "application/json");
       if (route === "state" && req.method === "GET") {
         const document = current ? `document/${current.entry.split("/").map(encodeURIComponent).join("/")}` : null;
-        return send(res, 200, JSON.stringify({ revision, title: current?.title ?? "", kind: current?.kind ?? null, document }), "application/json");
+        meet(client);
+        const superseded = Boolean(client && newest && client !== newest);
+        return send(res, 200, JSON.stringify({ revision, title: current?.title ?? "", kind: current?.kind ?? null, document, superseded }), "application/json");
       }
-      if (route === "heartbeat" && req.method === "POST") { clientAt = Date.now(); return send(res, 204); }
-      if (route === "goodbye" && req.method === "POST") { clientAt = 0; launchedAt = 0; return send(res, 204); }
+      if (route === "heartbeat" && req.method === "POST") {
+        meet(client);
+        if (!client || client === newest) clientAt = Date.now();
+        return send(res, 204);
+      }
+      if (route === "goodbye" && req.method === "POST") {
+        // A superseded window closing is not the viewer going away.
+        if (client && newest && client !== newest) { clients.delete(client); return send(res, 204); }
+        clientAt = 0; launchedAt = 0;
+        const at = Date.now(), app = returnTo, bundle = surface;
+        if (app && bundle) {
+          setTimeout(() => {
+            if (clientAt >= at || (client && newest !== client)) return; // reloaded or replaced
+            Promise.resolve(returnFocus(app, bundle)).catch(() => {});
+          }, RETURN_DELAY_MS).unref?.();
+        }
+        return send(res, 204);
+      }
       if (route === "launch-failed" && req.method === "POST") { launchedAt = 0; return send(res, 204); }
+      if (route === "surface" && req.method === "POST") {
+        const input = await bodyJson(req);
+        surface = typeof input.bundle === "string" && /^[\w.-]{1,200}$/.test(input.bundle) ? input.bundle : null;
+        return send(res, 204);
+      }
       if (route === "close" && req.method === "POST") {
         current = null;
         revision++;
@@ -289,7 +365,10 @@ export async function createHost({ token = randomBytes(32).toString("hex"), port
         if (typeof input.file !== "string" || !path.isAbsolute(input.file)) return send(res, 400);
         current = await selectionFor(input.file);
         revision++;
-        const launch = Date.now() - Math.max(clientAt, launchedAt) > 10000;
+        returnTo = Number.isSafeInteger(input.returnTo) && input.returnTo > 0 ? input.returnTo : null;
+        // `raise`: a window behind others cannot bring itself forward, so a new one opens and
+        // the old one retires once the new one speaks.
+        const launch = input.raise === true || Date.now() - Math.max(clientAt, launchedAt) > 10000;
         if (launch) launchedAt = Date.now();
         return send(res, 200, JSON.stringify({ launch, revision }), "application/json");
       }
@@ -297,7 +376,11 @@ export async function createHost({ token = randomBytes(32).toString("hex"), port
         const body = await fs.readFile(path.join(here, "shell.html"));
         return send(res, 200, body, "text/html", { "Content-Security-Policy": SHELL_CSP });
       }
-      if (["shell.css", "shell.js", "image-controls.js", "gltf-view.js"].includes(route) && req.method === "GET") {
+      if (route === "pages" && req.method === "GET") {
+        const body = await fs.readFile(path.join(here, "pages.html"));
+        return send(res, 200, body, "text/html", { "Content-Security-Policy": SHELL_CSP });
+      }
+      if (["shell.css", "shell.js", "pages.js", "image-controls.js", "gltf-view.js"].includes(route) && req.method === "GET") {
         const body = await fs.readFile(path.join(here, route));
         return send(res, 200, body, route.endsWith("css") ? "text/css" : "text/javascript", { "Content-Security-Policy": SHELL_CSP });
       }
@@ -424,8 +507,10 @@ async function ensureSession(dir) {
   throw new Error("Viewer host did not start");
 }
 
+// Resolves with the bundle id of the app window it opened on macOS (for the focus return),
+// else null.
 async function openBrowser(url) {
-  if (process.env.READLIST_VIEWER_NO_BROWSER === "1") return;
+  if (process.env.READLIST_VIEWER_NO_BROWSER === "1") return null;
   const run = (command, args) => new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
     child.once("error", reject);
@@ -438,22 +523,31 @@ async function openBrowser(url) {
   });
   if (process.platform === "darwin") {
     try {
-      await fs.access("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
-      return await run("open", ["-na", "Google Chrome", "--args", `--app=${url}`]);
-    } catch { return run("open", [url]); }
+      await fs.access(CHROME_APP);
+      await run("open", ["-na", "Google Chrome", "--args", `--app=${url}`]);
+      return CHROME_BUNDLE;
+    } catch { await run("open", [url]); return null; }
   }
   if (process.platform === "win32") {
     const edge = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA]
       .filter(Boolean).map((dir) => path.join(dir, "Microsoft", "Edge", "Application", "msedge.exe"));
     for (const candidate of edge) {
-      try { await fs.access(candidate); return await detached(candidate, [`--app=${url}`]); } catch { /* try the next browser */ }
+      try { await fs.access(candidate); await detached(candidate, [`--app=${url}`]); return null; } catch { /* try the next browser */ }
     }
-    return run("cmd.exe", ["/d", "/s", "/c", `start "" "${url}"`]);
+    await run("cmd.exe", ["/d", "/s", "/c", `start "" "${url}"`]);
+    return null;
   }
   for (const command of ["chromium", "chromium-browser", "google-chrome"]) {
-    try { return await detached(command, [`--app=${url}`]); } catch { /* try the next browser */ }
+    try { await detached(command, [`--app=${url}`]); return null; } catch { /* try the next browser */ }
   }
-  return run("xdg-open", [url]);
+  await run("xdg-open", [url]);
+  return null;
+}
+
+// macOS with Chrome: the viewer is a Chrome app window, raised on every open.
+async function chromeAppWindow() {
+  if (process.platform !== "darwin" || process.env.READLIST_VIEWER_NO_BROWSER === "1") return false;
+  try { await fs.access(CHROME_APP); return true; } catch { return false; }
 }
 
 async function main() {
@@ -473,16 +567,22 @@ async function main() {
     return;
   }
   if (action !== "open" || !dir || !file || !path.isAbsolute(file)) throw new Error("Expected open SESSION_DIR ABSOLUTE_FILE");
+  // The app this was opened from (Herdr), asked before the viewer takes the front.
+  const [front, raise] = await Promise.all([
+    process.env.READLIST_VIEWER_NO_BROWSER === "1" ? null : frontmostApp(), chromeAppWindow()]);
   const running = await ensureSession(dir);
-  const response = await fetch(running.base + "select", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file }) });
+  const returnTo = front && front.bundle !== CHROME_BUNDLE ? front.pid : undefined;
+  const response = await fetch(running.base + "select", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file, returnTo, raise }) });
   if (!response.ok) throw new Error("Viewer file is unavailable");
   const result = await response.json();
   if (result.launch) {
-    try { await openBrowser(running.base + "shell"); }
+    let bundle;
+    try { bundle = await openBrowser(running.base + "shell"); }
     catch (error) {
       await fetch(running.base + "launch-failed", { method: "POST" }).catch(() => {});
       throw error;
     }
+    await fetch(running.base + "surface", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bundle }) }).catch(() => {});
   }
   process.stdout.write("viewer\n");
 }

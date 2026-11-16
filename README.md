@@ -11,16 +11,35 @@ default app when you press Enter.
 
 | | Open (Enter) | Show in the file manager (`o`) | Space: preview window | Thumbnails in the pane | Popup key |
 |---|---|---|---|---|---|
-| macOS | `open` | Finder (`open -R`) | Built-in browser viewer by default for Markdown, HTML, PDF, video, common images and glTF; Quick Look for other files | Quick Look (PDF, ...) | `cmd-shift-i` |
-| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | Built-in browser viewer by default for Markdown, HTML, PDF, video, common images and glTF; GNOME Sushi for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
-| Windows | the default app | Explorer (`explorer /select,`) | Built-in browser viewer by default for Markdown, HTML, PDF, video, common images and glTF; QuickLook or PowerToys Peek for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+| macOS | `open` | Finder (`open -R`) | By default a preview window inside Herdr for Markdown, HTML, PDF and common images, and the browser viewer for video and glTF; Quick Look for other files | Quick Look (PDF, ...) | `cmd-shift-i` |
+| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | By default a preview window inside Herdr for Markdown, HTML, PDF and common images, and the browser viewer for video and glTF; GNOME Sushi for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+| Windows | the default app | Explorer (`explorer /select,`) | By default a preview window inside Herdr for Markdown, HTML, PDF and common images, and the browser viewer for video and glTF; QuickLook or PowerToys Peek for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+
+**The preview window.** Space on a Markdown, HTML, PDF or image item opens a floating window
+inside Herdr that shows the rendered page: Markdown and HTML with their styles and local images,
+PDF pages one under another (the first 100), images with fit, zoom and pan. It takes the keyboard
+when it opens: the wheel, `j` / `k`, the arrows, Page Down / Page Up, Ctrl-D / Ctrl-U and
+`g` / Shift-G scroll it, Esc or Space closes it, and Enter (or **Enter · Interactive**) opens the
+live page in the browser viewer instead, where links, text selection, search and copy work; the
+window is a picture of the page, so those do not. Space again on the same item in the list closes
+it, Space on another item shows that one in the same window, and the list has the keyboard again
+when it closes. Drag the window by its title bar; it opens where you last left it. Pages draw with
+a headless Chrome, Chromium or Edge and Node.js; without them the window shows the text preview,
+and Enter still opens the browser viewer when it can.
+
+**Back to Herdr (macOS).** Closing the browser viewer window, or the Quick Look panel, makes Herdr
+the active app again instead of leaving you in another Chrome window or app. That happens only when
+the viewer or the panel was still the active app when it closed, so switching to another app first
+is left alone. Opening the browser viewer again while one is already open brings up a new window
+in front and closes the old one, so one viewer window stays.
 
 To use your platform's preview window for those supported types too, press `f` in the list and
 choose **Space preview → System preview**. Choose **Built-in viewer** to switch back. The choice
 is stored as `"readlist": {"space_preview": "system"}` in Herdr's live `settings.json`
 (default: `"builtin"`), shared by every Reading list copy. The next Space press uses the new
 choice. Your opted-in handler still gets first chance; unsupported types and the in-pane fallback
-keep their existing behavior. This setting changes Space in the reading list;
+keep their existing behavior. With **System preview**, those types skip the Herdr window too.
+This setting changes Space in the reading list;
 `rl preview --browser` explicitly opens the browser viewer.
 
 The browser viewer needs Node.js 20 or newer and a browser on each platform. It
@@ -31,7 +50,7 @@ Local HTML also renders as image tiles in the reading list's preview pane when C
 Edge and a Node.js runtime with WebSocket support are available. Tiles appear as they finish; the
 pane reflows the page when its width or the theme changes. Its wheel and keys scroll the page.
 Click a local HTML link to show that page in the same pane; **Back** or Backspace returns to the
-previous page. Image tiles cannot be selected or searched, so Space from the list still opens the
+previous page. Image tiles cannot be selected or searched; Enter in the preview window opens the
 browser viewer for selection and search. If tile rendering fails, the pane explains why and shows
 the HTML text preview.
 See the [viewer contract](docs/viewer-contract.md). Without Node or a browser, Space shows the native
@@ -68,7 +87,9 @@ checks the mod. To do it by hand, copy the `mods/readlist` folder there yourself
 Linux and Windows), and run `herdr-app check ~/.config/herdr-app/mods/readlist`.
 
 What the mod does on your computer: it runs programs (`sh` scripts, its own `rl`, and on macOS
-`open`, `qlmanage` for Quick Look and thumbnails and `osascript` to bring Quick Look to the front, on Linux `xdg-open` and `gdbus` for the file
+`open`, `qlmanage` for Quick Look and thumbnails and `osascript` to bring Quick Look to the front and
+Herdr back when Quick Look or the browser viewer closes (it asks macOS which app is active and
+activates one; no Apple Events, so no Automation prompt), on Linux `xdg-open` and `gdbus` for the file
 manager and GNOME Sushi, on Windows `pwsh` with its own scripts, `explorer.exe` and QuickLook or
 Peek if installed, and only if you turn it on, your own handler), reads the files on the list
 wherever they are (and, only if
@@ -79,7 +100,7 @@ adds to that, when Node.js is installed: `node` runs the mod's `viewer/` scripts
 small web server on `127.0.0.1` only (a random port, a random session token on every address) for
 the file you preview and the local files it refers to, open your browser on it (a Chrome, Edge or
 Chromium app window when there is one), run headless Chrome, Chromium or Edge to draw local HTML
-and glTF models for the pane, and run `ffmpeg` for a video's poster frame if it is installed. It
+and glTF models for the pane and Markdown, HTML and PDF pages for the preview window, and run `ffmpeg` for a video's poster frame if it is installed. It
 writes its session file in `~/.config/herdr-app/readlist/viewer/`, the drawn pages and models in
 `~/.config/herdr-app/readlist-tile-cache/` and `readlist-model-cache/`, and, when you choose a
 Space preview in the `f` menu, the `readlist` entry of Herdr's `settings.json`. On other
@@ -209,7 +230,7 @@ In the list:
 | click, `j` / `k`, arrows, `g` / `G` | select (selecting never opens anything) |
 | Enter, double-click | open in its app; marks it read. On a folder: browse its contents in the list |
 | Right / Left, Backspace, `.` | while browsing a folder: enter the selected subfolder / go up / show or hide hidden entries |
-| Space | the chosen built-in viewer or system preview for Markdown, HTML, PDF, video, common still images and glTF models; Quick Look, GNOME Sushi, QuickLook or PowerToys Peek for other files where available (again closes the preview) |
+| Space | the preview window inside Herdr for Markdown, HTML, PDF and common still images, the browser viewer for video and glTF models (or the system preview for all of them, as chosen in `f`); Quick Look, GNOME Sushi, QuickLook or PowerToys Peek for other files where available (again closes the preview) |
 | `p` | show or hide the preview in the pane |
 | `v` | a preview pane on the right of the window that follows the selection |
 | `o` | show in Finder (the file manager on Linux, Explorer on Windows) |
