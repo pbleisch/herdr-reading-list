@@ -9,7 +9,7 @@ opens it, Space opens the interactive viewer in the browser, `q` the platform's 
 or docks that preview beside the sidebar with `v`, opens it in its default app with Enter, browses
 a folder item's contents in the list, and marks it done. Agents on
 other machines Herdr reaches add to that machine's own list, which shows here too: their files
-are previewed in place or fetched into a local copy to open. When the person turns it on, files
+are read there for the preview or fetched into a local copy. When the person turns it on, files
 Claude Code agents send them with their SendUserFile tool arrive on the list too, without the agent
 running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shift-i`
 (`ctrl-shift-i` on Linux and Windows).
