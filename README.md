@@ -5,7 +5,7 @@ wrote, screenshots, HTML reports, PDFs, folders) or URLs on the list with one co
 and a note saying why. The list shows who added each item, previews it with Space in a window inside
 Herdr (or docked beside the sidebar with `v`), and opens it in its default app when you press Enter.
 
-![Reading list](preview.png)
+![The reading list in Herdr's sidebar, with the Space preview window open on a Markdown report: the item's note under its title and the Enter, Space, q and o buttons](preview.png)
 
 ## Platforms
 
@@ -55,6 +55,8 @@ by its title bar; it opens where you last left it.
 following the selection (the list keeps the keyboard; click the preview to use its keys, where
 `[` / `]` resize it). `v` in the list, Esc in the preview or its **Hide** button hides it. The install adds this dock to the reading-list layout as a
 hidden block; in a layout without it, `v` opens the preview as a pane on the right of the tab.
+
+![The same preview docked full height right of the sidebar, with its Hide button](preview-docked.png)
 
 **Back to Herdr (macOS).** Closing the browser viewer window, or the Quick Look panel, makes Herdr
 the active app again instead of leaving you in another Chrome window or app. That happens only when

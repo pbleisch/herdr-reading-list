@@ -15,7 +15,7 @@ running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shi
 (`ctrl-shift-i` on Linux and Windows).
 `skill/reading-list/SKILL.md` is an agent skill that teaches agents when and how to add.
 
-![Reading list](preview.png)
+![The reading list in Herdr's sidebar, with the Space preview window open on a Markdown report: the item's note under its title and the Enter, Space, q and o buttons](preview.png)
 
 | Platform | Support |
 |---|---|

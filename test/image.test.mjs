@@ -13,7 +13,7 @@ const pad = (b, n = 64) => Uint8Array.from([...b, ...new Array(Math.max(0, n - b
 const str = (s) => [...s].map((c) => c.charCodeAt(0));
 
 test("image sizes come from the first bytes of PNG, GIF, JPEG, WebP and BMP", () => {
-  assert.deepEqual(imageSize(readFileSync(repoFile("preview.png"))), { width: 1600, height: 698 });
+  assert.deepEqual(imageSize(readFileSync(repoFile("preview.png"))), { width: 1600, height: 1293 });
   assert.deepEqual(imageSize(readFileSync(repoFile("mods/readlist/images/checker-dark.png"))), { width: 512, height: 512 });
   assert.deepEqual(imageSize(pad(bytes(str("GIF89a"), [0x40, 0x01, 0xf0, 0x00]))), { width: 320, height: 240 });
   assert.deepEqual(imageSize(pad(bytes(str("BM"), new Array(16).fill(0), [0x10, 0, 0, 0], [0xf0, 0xff, 0xff, 0xff]))), { width: 16, height: 16 }, "a top-down BMP");
@@ -46,7 +46,7 @@ test("head64 prints the first bytes of an image as one line of base64", posix, (
   const out = execFileSync(c.command, c.args).toString();
   assert.doesNotMatch(out, /\n/);
   assert.equal(fromBase64(out).length, IMAGE_HEAD_BYTES);
-  assert.deepEqual(imageSize(fromBase64(out)), { width: 1600, height: 698 });
+  assert.deepEqual(imageSize(fromBase64(out)), { width: 1600, height: 1293 });
   assert.deepEqual(helperCall("windows", "C:\\m", "head64", ["C:\\a.png"]).args.slice(-3), ["head64", "C:\\a.png", String(IMAGE_HEAD_BYTES)]);
 });
 
@@ -77,7 +77,7 @@ test("a video poster is one PNG frame from FFmpeg, cached by the file, or a clea
   const first = await videoPoster(clip, cache, fake);
   assert.match(first.key, /^[a-f0-9]{20}$/);
   assert.equal(first.cached, false);
-  assert.deepEqual(imageSize(await fs.readFile(path.join(cache, first.key, "poster.png"))), { width: 1600, height: 698 });
+  assert.deepEqual(imageSize(await fs.readFile(path.join(cache, first.key, "poster.png"))), { width: 1600, height: 1293 });
   assert.deepEqual(await videoPoster(clip, cache, fake), { key: first.key, cached: true });
   await assert.rejects(videoPoster(clip, path.join(dir, "other"), path.join(dir, "no-ffmpeg")), /FFmpeg is not installed/);
   assert.deepEqual(await fs.readdir(path.join(dir, "other")), [], "a failed poster leaves no folder behind");

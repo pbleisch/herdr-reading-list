@@ -656,6 +656,7 @@ herdr-reading-list/            laid out like a herdr-app home, so it can be shar
   mods/readlist/handlers/      the built-in action handlers (macos.sh, linux.sh; 4.7)
   keys.json                    cmd-shift-i (macOS) / ctrl-shift-i (Linux) open the popup (each platform merges its own, only where free)
   RECIPE.md, preview.png       the herdr.dev brief and screenshot
+  preview-docked.png           the docked preview (`v`), shown in the README
   skill/reading-list/SKILL.md  for agents: when to add, the rl commands, the zero-install fallback
   bin/rl                       a link to mods/readlist/bin/rl
   bin/install-dev              copies the mod, merges keys.json, links rl, adds the sidebar block
