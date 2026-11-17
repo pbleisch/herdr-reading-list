@@ -2,6 +2,36 @@
 
 What changed for people who use the reading list. The version is the `version` in `package.json`.
 
+## 0.3.0
+
+One preview, inside Herdr. Space now opens a floating Herdr window for every file, `v` docks the
+same preview beside the list, and the preview beside the list is gone.
+
+### Changed
+
+- **One preview, inside Herdr.** Space on any file opens a floating Herdr window with the best
+  picture of it: Markdown, HTML and PDF as rendered pages, images on a checkerboard inside a thin
+  border (`b` switches to plain dark or light gray), a frame of a video (with FFmpeg installed), a
+  still of a glTF model, highlighted text and code, else a thumbnail. The preview beside the list,
+  and its `p` key, are gone.
+- **Keys in the preview.** Enter opens the file in its default app and marks it read, Space opens
+  the interactive browser viewer, `q` the platform's preview window (Quick Look, GNOME Sushi,
+  QuickLook or Peek), `o` shows it in the file manager, Esc closes it, and `[` / `]` change its
+  width, which is kept. It opens at 70% of Herdr's width, between 640 and 1280 px.
+- **The window follows the selection.** While it is open, selecting another item in the list
+  (a click or the list's keys) shows that item in it, as the docked preview does. Shift-J /
+  Shift-K inside the preview select the next or previous item. Clicking the list gives it the
+  keyboard back without closing the window.
+- **`v` docks the preview** full height right of the sidebar, following the selection, with a
+  **Hide** button; `v` again, Esc or Hide hides it. It replaces the `v` pane. The install adds the
+  dock to the reading-list layout.
+
+### Fixed
+
+- On macOS, closing the browser viewer or the Quick Look panel while it is the active app makes
+  Herdr the active app again, and opening the browser viewer again brings a new window to the
+  front instead of leaving it behind Herdr.
+
 ## 0.2.0
 
 A built-in viewer, folder browsing and a preview command. Everything that was there before works
