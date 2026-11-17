@@ -9,7 +9,7 @@ Goals:
 - Any agent, script or tool can put a file (or a URL) on the person's reading list with one command,
   with a note saying why, and the list records who added it.
 - The person sees new items arrive (count, toast), walks the list with the keyboard, previews an item
-  in place, and opens it in its macOS app with Enter.
+  in a window inside Herdr or docked beside the sidebar, and opens it in its macOS app with Enter.
 - Read, unread and done state per item; filter by space, by agent, by type, or unread only.
 - Works for files on other machines (remote spaces), fetching a local copy before opening.
 - Hands a markdown or HTML item to a document-review mod for commenting, bound to the agent that
@@ -18,8 +18,8 @@ Goals:
 Non-goals:
 
 - Commenting, annotations or editing (the review mod's job).
-- A full HTML renderer in this mod (`TextView.html`, text without CSS, in the pane; the review mod or
-  the browser for full fidelity).
+- A live HTML renderer in this mod (the built-in preview shows pages as screenshots, 4.8; the
+  browser viewer or the review mod for interaction).
 - Syncing read state between people or machines; the list is one person's.
 - Replacing Herdr's own "agent finished" toasts.
 - Changing shipped layouts or mods (no badge in the tab bar or status bar; see 4.4).
@@ -247,7 +247,7 @@ Keys work while the pane has the keyboard (`focusable`, row 19; a click on the l
 keyboard). A click on a row selects it and gives the list the keyboard; moving through the list
 never opens anything. A double-click opens, like Enter. Each key is also a mod command, so `keys.json` can bind it
 globally and scripts can drive it: `herdr-app do readlist.<command>` with `down`, `up`, `top`,
-`bottom`, `open`, `preview`, `pane`, `reveal`, `copy`, `read`, `done`, `undo`, `delete`, `view`,
+`bottom`, `open`, `preview`, `reveal`, `copy`, `read`, `done`, `undo`, `delete`, `view`,
 `find`, `filter`, `viewer`, `focus`, `install-rl`, `refresh`, `claude-files` or `handler` (4.7). A command reaches every shown copy; only the copy that had
 the keyboard last acts on it (`shared("readlist.keyboard")`, cleared when that copy closes), else
 the sidebar's.
@@ -284,6 +284,7 @@ the keyboard, which a click gives it) the keys scroll and search the item it sho
 | Shift-Space, Page Down / Page Up | scroll a page, less a line |
 | Ctrl-D / Ctrl-U | scroll half a page |
 | `g` / Shift-G, Home / End | the top / the bottom |
+| Shift-J / Shift-K | the list's next / previous item (the window and the docked preview), which the preview then shows |
 
 - `TextView` and `Editor` do not expose programmatic scrolling. The viewer lays markdown and
   remote HTML out at full height in a clipped box and moves them by an offset it keeps itself,
@@ -585,7 +586,16 @@ viewer only from here: Space in the list always opens the built-in preview.
 
 - `shared("readlist.window")` is `{overlay, id, copy}` while the window is open. Space in the list
   on its item closes it, on another item replaces its file in place (same key), and closes it
-  before the platform's preview opens (`windowPlan`). With **System preview** and no preview
+  before the platform's preview opens (`windowPlan`).
+- The window follows the selection, as the docked preview does (`windowFollows`, `followWindow`):
+  the list copy whose selection moves opens it again under its key with the new item, keeping
+  the keyboard where it was (props `focus: false` when the list has it). It does not ask the
+  person's handler. Links, folders and missing files show a notice; another machine's file is
+  fetched quietly unless it is over 50 MiB without a fresh copy, which shows a notice and marks
+  the window `held` so Space fetches it instead of closing. Shift-J / Shift-K in the window
+  and the docked preview run `readlist.down` / `readlist.up` (`LIST_KEYS`), so the list that
+  had the keyboard moves and the preview follows. A click on the list takes the keyboard back
+  and leaves the window open. With **System preview** and no preview
   window on the platform (Linux without Sushi, Windows without QuickLook or Peek), Space opens
   the built-in window and a one-time toast says why.
 - It takes the keyboard on open; the scroll keys (4.3) and the wheel scroll it, Backspace returns

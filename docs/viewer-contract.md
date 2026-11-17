@@ -40,7 +40,9 @@ same host, manifest and document CSP as below; Markdown goes through the host's 
 document route, and PDF through the trusted `pages` view, which lays out every page (at most 100)
 and draws page canvases only around the tile being captured. Images use the mod's image renderer,
 a local video an FFmpeg frame (`video-poster.mjs`), glTF a still (`render-model.mjs`). The window
-takes the keyboard; Space calls `host.mjs open` (the browser surface) and closes the window. Its
+takes the keyboard; Space calls `host.mjs open` (the browser surface) and closes the window. It
+follows the list's selection like the docked preview, opened again in its place for each newly
+selected item, and Shift-J / Shift-K move that selection from inside it. Its
 width (70 % of Herdr's within 640-1280 px, or the one last chosen with `[` / `]`) sets the tile
 width, so a resize draws the page again at the new width. Without tiles, it shows the text (none
 for PDF).
@@ -49,9 +51,9 @@ for PDF).
 
 The built-in preview renders a local HTML selection with the same `manifestFor`
 allowlist and `createHost` document route as the browser viewer. A separate headless installed
-Chrome, Chromium or Edge captures 512 CSS-pixel-high PNG tiles at the pane width and 2× scale.
+Chrome, Chromium or Edge captures 512 CSS-pixel-high PNG tiles at the preview's width and 2× scale.
 The renderer uses the document CSP from this host, which disables scripts and network resources;
-the pane displays screenshots and never runs document code. It reports the layout and links first,
+the preview displays screenshots and never runs document code. It reports the layout and links first,
 then atomically updates a progress file after each completed tile. The mod polls that file and
 shows ready tiles without waiting for the final one, with placeholders for missing tiles. The
 visible tiles are captured first, beginning at the current scroll position. A width change is debounced and a theme change requests a
@@ -62,12 +64,12 @@ Its key hashes the selected path, selected HTML and every allowed local asset's 
 scale and appearance. Successful uses update entry recency; the renderer evicts the least recently
 used entries above 256 MiB. A single render exceeding that limit fails back to the text preview.
 The mod shows only visible tiles. A captured link can open another allowed local HTML page in the
-same pane; fragment links scroll within the page. Back or Backspace returns to the previous page.
+same preview; fragment links scroll within the page. Back or Backspace returns to the previous page.
 Remote items retain the existing text preview and local-copy rules. When the browser binary or
 rendering is unavailable, a brief note accompanies the existing HTML TextView preview. The tiles
 are images; Space in the built-in preview opens the selectable, searchable browser viewer.
 
-By default, Space on a local file opens the built-in preview above. Space there on a local Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`), HTML (`.html`, `.htm`, `.xhtml`), PDF (`.pdf`), video (`.mp4`, `.m4v`, `.webm`, `.mov`), glTF (`.glb`, `.gltf`) or browser image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`, `.heic`, `.heif`, `.bmp`) opens or updates one local viewer surface. In the list's `f` menu, **Space preview → System preview** routes these types to the platform handler instead (Quick Look, GNOME Sushi, QuickLook or PowerToys Peek). Herdr stores the choice at `readlist.space_preview` in its live `settings.json`; `builtin` is the default and `system` selects the platform. Each Space press reads that value, so edits apply without a restart and every copy uses the same choice. TIFF and PSD always retain the platform handler. The person's opted-in Space handler retains first choice. The viewer needs Node.js 20 or newer and a browser. The launcher uses a Chrome app window on macOS when installed, an Edge app window on Windows when installed, or a Chromium app window on Linux when installed; otherwise it opens the system browser URL. If launch fails, the built-in preview says why and stays open. With System preview, a platform handler that passes falls back to the built-in preview window. Enter continues to reveal executable files and application bundles according to `core/items.js`; opening the viewer neither marks an item read nor changes Enter.
+By default, Space on any local file in the list opens the built-in preview above. Space there on a local Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`), HTML (`.html`, `.htm`, `.xhtml`), PDF (`.pdf`), video (`.mp4`, `.m4v`, `.webm`, `.mov`), glTF (`.glb`, `.gltf`) or browser image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`, `.heic`, `.heif`, `.bmp`) opens or updates one local viewer surface; for other types Space there says the browser viewer does not show them. In the list's `f` menu, **Space preview → System preview** sends Space on every file to the platform handler instead (Quick Look, GNOME Sushi, QuickLook or PowerToys Peek); `q` in the built-in preview does the same at any time. Herdr stores the choice at `readlist.space_preview` in its live `settings.json`; `builtin` is the default and `system` selects the platform. Each Space press reads that value, so edits apply without a restart and every copy uses the same choice. The person's opted-in Space handler retains first choice. The viewer needs Node.js 20 or newer and a browser. The launcher uses a Chrome app window on macOS when installed, an Edge app window on Windows when installed, or a Chromium app window on Linux when installed; otherwise it opens the system browser URL. If launch fails, the built-in preview says why and stays open. With System preview, a platform handler that passes falls back to the built-in preview window. Enter continues to reveal executable files and application bundles according to `core/items.js`; opening the viewer neither marks an item read nor changes Enter.
 
 Markdown is rendered by locally bundled Marked with GFM headings, lists, tables, task lists, links, images and fenced code blocks. Raw HTML is escaped and shown as text. Code blocks retain their language class but do not use a separate syntax-highlighting runtime. The output loads in the same scriptless, sandboxed frame as HTML. Relative links and images are included only when the resolved real file stays below the selected Markdown file's real parent folder and fits the document manifest limits. Linked Markdown pages are rendered by the same route. Remote URLs, data URLs, missing files and path escapes are rendered without active links or images. `rl preview --browser` uses this route too; its native `--pane` preview remains available when the browser viewer cannot open.
 
@@ -105,7 +107,7 @@ Linux; Windows uses the installed PowerShell launcher (`rl.ps1` or `rl.cmd`)
 with the same argument boundary. The path must never be interpolated into a
 shell command.
 
-The pane retains its `image()` path with Fit, zoom and keyboard pan. For local glTF it asks the existing headless browser capture path for one poster at 2× scale, cached by the model and allowed asset bytes under `appHome()/readlist-model-cache`; the browser viewer supplies interaction. The angle ring was deferred because each angle requires another WebGL capture and cache entry. A missing headless browser or WebGL context leaves a clear poster fallback. Remote `.gltf` items use their native thumbnail path because the local copy lacks sibling assets; a remote `.glb` can use the browser viewer as a single self-contained file.
+The built-in preview draws images with its `image()` path, with Fit, zoom and keyboard pan. For local glTF it asks the existing headless browser capture path for one poster at 2× scale, cached by the model and allowed asset bytes under `appHome()/readlist-model-cache`; the browser viewer supplies interaction. The angle ring was deferred because each angle requires another WebGL capture and cache entry. A missing headless browser or WebGL context leaves a clear poster fallback. Remote `.gltf` items use their native thumbnail path because the local copy lacks sibling assets; a remote `.glb` can use the browser viewer as a single self-contained file.
 
 The bundled runtimes are Marked 18.2.0, MIT, under `mods/readlist/viewer/marked`; Mozilla PDF.js (`pdfjs-dist` 4.10.38), Apache-2.0, under `mods/readlist/viewer/pdfjs`; and Three.js 0.187.0, MIT, under `mods/readlist/viewer/three`. PDF.js and Marked are the packages' own builds (`pdf.min.mjs`, `pdf.worker.min.mjs`, `marked.esm.js`). Three.js publishes no minified module, so `three/three.min.js` is a minified esbuild bundle of only what `gltf-view.js` uses from the core, GLTFLoader, OrbitControls and RoomEnvironment. `mods/readlist/viewer/VENDORED.md` lists each file's source, checksum and the commands that reproduce it. The viewer loads no CDN or remote script.
 
@@ -115,7 +117,7 @@ For a remote reading-list item, Space uses the existing local-copy path and its 
 
 The HTTP host binds only `127.0.0.1`, requires a random 256-bit session token on every route, rejects unexpected Host headers, and keeps the token in a user-only session file. Requested files must be in the current reference manifest. Canonical paths and symlinks must stay under the selected document's real parent directory. A new selection replaces the manifest. Responses use `nosniff`, no-store and a no-referrer policy.
 
-The session file records a hash of the host, shell, image/model controls and bundled PDF.js and Three.js files. When the installed build differs from a running host, the launcher verifies the recorded PID's command before stopping it and starts the installed host. A failed restart reports the host's error in the mod and leaves the native in-pane preview available.
+The session file records a hash of the host, shell, image/model controls and bundled PDF.js and Three.js files. When the installed build differs from a running host, the launcher verifies the recorded PID's command before stopping it and starts the installed host. A failed restart reports the host's error in the mod and leaves the built-in preview available.
 
 The selected HTML or rendered Markdown document is untrusted. It loads inside `<iframe sandbox="">`, which gives it an opaque origin and no scripts, forms, popups or top-level navigation. Its CSP disallows scripts, network fetches, frames and objects while allowing local CSS, images and fonts. External resources cannot load during rendering. PDF.js runs only as trusted bundled code, with PDF evaluation and XFA disabled; a PDF is passed as data, never embedded as an active browser document. The trusted shell has a separate CSP and never inserts item text as HTML. A clicked HTML link may navigate within the sandboxed frame; linked local HTML is available only if referenced in the manifest. Browser support for CSP navigation directives varies, so external link clicks should not be treated as a secure offline browsing mode. Only preview documents from sources you trust to *view* in your browser. The host is intended to protect the viewer shell and local files from a hostile document, not to make a malicious browser engine safe.
 
@@ -139,4 +141,4 @@ The selected HTML or rendered Markdown document is untrusted. It loads inside `<
 | `.glb`, `.gltf` and confined assets | Orbit, pan, zoom, reset; undeclared or escaping assets unavailable | Same | Same |
 | No WebGL or headless browser | Clear model viewer or poster fallback | Same | Same |
 
-The Node HTTP tests exercise the resource policy, type routing, byte ranges and image control state on macOS. A local headless Chrome run captured `.glb` and `.gltf` posters, including a locally referenced buffer. Linux and Windows launch paths need platform checks; their launch commands are implemented but were not exercised here. The in-pane preview and Enter rule are covered by the existing tests.
+The Node HTTP tests exercise the resource policy, type routing, byte ranges and image control state on macOS. A local headless Chrome run captured `.glb` and `.gltf` posters, including a locally referenced buffer. Linux and Windows launch paths need platform checks; their launch commands are implemented but were not exercised here. The built-in preview's routing and the Enter rule are covered by the existing tests.

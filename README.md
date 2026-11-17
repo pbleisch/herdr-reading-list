@@ -2,8 +2,8 @@
 
 A reading list for [Herdr](https://herdr.dev). Your agents and tools put files (markdown they
 wrote, screenshots, HTML reports, PDFs, folders) or URLs on the list with one command, `rl add`,
-and a note saying why. The list shows who added each item, previews it in place, and opens it in its
-default app when you press Enter.
+and a note saying why. The list shows who added each item, previews it with Space in a window inside
+Herdr (or docked beside the sidebar with `v`), and opens it in its default app when you press Enter.
 
 ![Reading list](preview.png)
 
@@ -28,7 +28,7 @@ picture of it this computer can make:
   note that Enter opens it.
 
 The window is a picture of the file: links, text selection, video and 3D are not interactive in
-it. Its keys, also shown as buttons in its title bar:
+it. Its keys, the main ones also shown as buttons in its title bar:
 
 | Key | Does |
 |---|---|
@@ -40,10 +40,14 @@ it. Its keys, also shown as buttons in its title bar:
 | `]` / `[` | wider / narrower (also `=` and `-`, except on an image, where they zoom); the width is kept |
 | wheel, `j` / `k`, arrows, Page Down / Page Up, Ctrl-D / Ctrl-U, `g` / Shift-G | scroll |
 | `/`, `n` / Shift-N | search the text of Markdown, HTML, text and code |
+| Shift-J / Shift-K | select the next / previous item in the list; the window shows it |
 | Backspace / Alt-Left | return from a local link followed in the page |
 
-Space again on the same item in the list closes the window, and Space on another item shows that
-one in the same window. It opens at 70% of Herdr's width, kept between 640 and 1280 px so lines
+The window follows the list's selection, as the docked preview does: select another item (click it,
+or move with the list's keys) and the window shows that one in its place. A link or a folder shows
+a short note instead, and a file over 50 MiB on another machine waits for Space to fetch it.
+Clicking the list gives it the keyboard back and leaves the window open; the window's own keys
+come back when you click it. Space again on the selected item closes the window. It opens at 70% of Herdr's width, kept between 640 and 1280 px so lines
 stay readable, then at the width you last chose; the page is drawn again at the new width. Drag it
 by its title bar; it opens where you last left it.
 
@@ -117,8 +121,9 @@ its list folder, its own `.cache/` and, when you press Install rl, `~/.local/bin
 adds to that, when Node.js is installed: `node` runs the mod's `viewer/` scripts, which start a
 small web server on `127.0.0.1` only (a random port, a random session token on every address) for
 the file you preview and the local files it refers to, open your browser on it (a Chrome, Edge or
-Chromium app window when there is one), run headless Chrome, Chromium or Edge to draw local HTML
-and glTF models for the pane and Markdown, HTML and PDF pages for the preview window, and run `ffmpeg` for a video's poster frame if it is installed. It
+Chromium app window when there is one), run headless Chrome, Chromium or Edge to draw Markdown,
+HTML and PDF pages and glTF stills for the built-in preview, and run `ffmpeg` for a video's frame
+if it is installed. It
 writes its session file in `~/.config/herdr-app/readlist/viewer/`, the drawn pages and models in
 `~/.config/herdr-app/readlist-tile-cache/` and `readlist-model-cache/`, and, when you choose a
 Space preview in the `f` menu, the `readlist` entry of Herdr's `settings.json`. On other
@@ -248,7 +253,7 @@ In the list:
 | click, `j` / `k`, arrows, `g` / `G` | select (selecting never opens anything) |
 | Enter, double-click | open in its app; marks it read. On a folder: browse its contents in the list |
 | Right / Left, Backspace, `.` | while browsing a folder: enter the selected subfolder / go up / show or hide hidden entries |
-| Space | the built-in preview window (or the platform's preview window, as chosen in `f`); again closes it |
+| Space | the built-in preview window (or the platform's preview window, as chosen in `f`), which then follows the selection; again closes it |
 | `v` | the built-in preview docked right of the sidebar, following the selection; again hides it |
 | `o` | show in Finder (the file manager on Linux, Explorer on Windows) |
 | `c` | copy the path or URL |
@@ -259,8 +264,8 @@ In the list:
 | `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch, Actions (built-in or your handler) and Space preview (built-in viewer or system preview) |
 | Shift-R | list this machine and every other one again now |
 
-The docked preview (`v`) and the `rl preview` pane have the window's keys (above); click them to
-give them the keyboard. Text and code show in a highlighted editor that scrolls with the wheel or
+The docked preview (`v`) and the `rl preview` pane have the window's keys (above; Shift-J /
+Shift-K only in the docked one); click them to give them the keyboard. Text and code show in a highlighted editor that scrolls with the wheel or
 the trackpad.
 
 The browser viewer fits still images by default. Use **Actual size**, the zoom buttons, the wheel
@@ -272,11 +277,11 @@ can use buffers and textures in its own folder; unsupported glTF extensions and 
 show an error in the viewer. The built-in preview shows a rendered still of the model when
 headless Chrome, Chromium or Edge can make one; Space there opens it interactively.
 
-The search is literal text, case-insensitive unless the
-query has a capital letter. It covers markdown, HTML, text and code; while it is on, the item shows
-as plain text (markdown as its source, HTML as its text), and it ends when the selection moves to
-another item; Esc ends it, and text and code go back to the highlighted editor at the top. Images,
-thumbnails and folders have nothing to search, and `/` says so.
+The preview's search (`/` in the window or the docked preview) is literal text, case-insensitive
+unless the query has a capital letter. It covers markdown, HTML, text and code; while it is on, the
+item shows as plain text (markdown as its source, HTML as its text), and it ends when the selection
+moves to another item; Esc ends it, and text and code go back to the highlighted editor at the top.
+Images, thumbnails and folders have nothing to search, and `/` says so. In the list, `/` filters.
 
 Each key in the list is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can
 bind in `keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the popup.
