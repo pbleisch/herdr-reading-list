@@ -78,12 +78,29 @@ export function windowAction(keystroke) {
 }
 
 // Space in the list while a preview window is open (shared("readlist.window") is
-// {overlay, id}): "toggle" closes it (Space again on its item), "replace" shows another item
-// in it, "close" closes it before another kind of preview opens, null when none is open.
+// {overlay, id, held}): "toggle" closes it (Space again on its item), "replace" shows another
+// item in it, "close" closes it before another kind of preview opens, null when none is open.
+// A window that only holds a note for its item (`held`: a large file on another machine not
+// fetched yet) is filled by Space rather than closed.
 export function windowPlan(open, key, route) {
   if (!open?.overlay) return null;
-  if (open.id === key && route === "window") return "toggle";
+  if (open.id === key && route === "window") return open.held ? "replace" : "toggle";
   return route === "window" ? "replace" : "close";
+}
+
+// The window follows the list's selection, as the docked preview does: when a list copy's
+// selection moves to `key` while the window is open, whether the window should show it now.
+// Not while it reopens at another width, and not when it already shows that item.
+export function windowFollows(open, key) {
+  return Boolean(open?.overlay) && open.overlay !== "resizing" && typeof key === "string" && key !== "" && key !== open.id;
+}
+
+// Keys in the window and the docked preview that move the list's selection, which the
+// preview then follows: Shift-J the next item, Shift-K the previous one. They run the list's
+// `down` / `up` commands, which the copy that had the keyboard last acts on.
+export const LIST_KEYS = { "shift-j": "down", "shift-k": "up" };
+export function listStep(keystroke) {
+  return LIST_KEYS[keystroke] ?? null;
 }
 
 // A note over a PDF drawn in part.

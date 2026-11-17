@@ -8,7 +8,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createHost, gltfManifestFor, RETURN_DELAY_MS } from "../mods/readlist/viewer/host.mjs";
-import { browserViewerType, spacePreviewRoute, viewerFailureNotice, windowAction, windowPlan, pagesNote, herdrWidth, windowWidth, resizedWidth, windowResizeKey } from "../mods/readlist/core/browser-viewer.js";
+import { SCROLL_KEYS } from "../mods/readlist/core/scroll.js";
+import { browserViewerType, spacePreviewRoute, viewerFailureNotice, windowAction, windowPlan, windowFollows, listStep, pagesNote, herdrWidth, windowWidth, resizedWidth, windowResizeKey } from "../mods/readlist/core/browser-viewer.js";
 import { folderItems } from "../mods/readlist/core/folder.js";
 import { typeOf } from "../mods/readlist/core/items.js";
 import { fitScale, clampZoom, rotateQuarter, installImageControls } from "../mods/readlist/viewer/image-controls.js";
@@ -319,9 +320,30 @@ test("the built-in preview: Enter opens, Space goes interactive, q system previe
   assert.equal(windowPlan(open, "item-b", "window"), "replace");
   assert.equal(windowPlan(open, "item-a", "browser"), "close");
   assert.equal(windowPlan(open, "item-b", "system"), "close");
+  // A window holding only a note for its item (a large remote file not fetched) is filled by Space.
+  assert.equal(windowPlan({ ...open, held: true }, "item-a", "window"), "replace");
   assert.equal(pagesNote({ pages: 12, shown: 12 }), null);
   assert.equal(pagesNote(null), null);
   assert.match(pagesNote({ pages: 412, shown: 100 }), /first 100 of 412 pages/);
+});
+
+test("the preview window follows the list's selection, and Shift-J / Shift-K move it", () => {
+  const open = { overlay: "o1", id: "item-a", copy: "c1" };
+  assert.equal(windowFollows(open, "item-b"), true, "another item is shown in the open window");
+  assert.equal(windowFollows(open, "item-a"), false, "the item it shows already");
+  assert.equal(windowFollows(null, "item-b"), false, "no window open");
+  assert.equal(windowFollows({ overlay: null, copy: "c1" }, "item-b"), false, "the window closed");
+  assert.equal(windowFollows({ ...open, overlay: "resizing" }, "item-b"), false, "while it reopens at another width");
+  assert.equal(windowFollows(open, null), false, "nothing selected");
+  assert.equal(listStep("shift-j"), "down");
+  assert.equal(listStep("shift-k"), "up");
+  for (const k of ["j", "k", "n", "shift-n", "down", "up", "space", "shift-g"]) assert.equal(listStep(k), null, k);
+  // They never collide with the preview's own keys.
+  for (const k of ["shift-j", "shift-k"]) {
+    assert.equal(windowAction(k), null, k);
+    assert.equal(windowResizeKey(k), null, k);
+    assert.equal(SCROLL_KEYS[k], undefined, k);
+  }
 });
 
 test("the preview window opens at 70% of Herdr's width within 640-1280 px, and [ / ] resize it", () => {
