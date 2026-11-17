@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseListing, normalizeItem, typeOf, openAction, itemFile } from "../mods/readlist/core/items.js";
 import { parseState, serializeState, isRead, isDone, applyAction, prune, rowsFor, counts, ago, who } from "../mods/readlist/core/state.js";
-import { addToSidebar, BLOCK } from "../layout/add-to-sidebar.mjs";
+import { addToSidebar, BLOCK, VIEWER } from "../layout/add-to-sidebar.mjs";
 
 const item = (over = {}) => ({
   v: 1,
@@ -173,15 +173,24 @@ test("who: live agent, ended terminal, or the recorded source", () => {
   assert.equal(who(norm({ by: { terminal: null, from: "someone@cron" } }), live).label, "someone@cron");
 });
 
-test("addToSidebar puts the block under agents, once", () => {
+test("addToSidebar puts the list under agents and the hidden docked preview after the sidebar, once", () => {
   const layout = {
     id: "root", type: "row",
-    children: [{ id: "sidebar", type: "column", children: [{ id: "lists", type: "column", children: [{ id: "spaces" }, { id: "agents" }] }, { id: "footer" }] }],
+    children: [{ id: "sidebar", type: "column", children: [{ id: "lists", type: "column", children: [{ id: "spaces" }, { id: "agents" }] }, { id: "footer" }] }, { id: "work" }],
   };
   const out = addToSidebar(layout);
   assert.deepEqual(out.children[0].children[0].children.map((c) => c.id), ["spaces", "agents", "readlist"]);
   assert.deepEqual(out.children[0].children[0].children[2], BLOCK);
+  assert.deepEqual(out.children.map((c) => c.id), ["sidebar", "readlist-viewer", "work"]);
+  assert.deepEqual(out.children[1], VIEWER);
+  assert.equal(VIEWER.hidden, true);
   assert.deepEqual(layout.children[0].children[0].children.map((c) => c.id), ["spaces", "agents"]);
   assert.equal(addToSidebar(out), out);
+  // A layout set up before the dock existed gets only the dock.
+  const older = structuredClone(out);
+  older.children.splice(1, 1);
+  const upgraded = addToSidebar(older);
+  assert.deepEqual(upgraded.children.map((c) => c.id), ["sidebar", "readlist-viewer", "work"]);
+  assert.equal(upgraded.children[0].children[0].children.filter((c) => c.id === "readlist").length, 1);
   assert.throws(() => addToSidebar({ id: "root", children: [] }), /agents/);
 });

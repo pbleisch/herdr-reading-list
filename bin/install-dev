@@ -61,7 +61,8 @@ shown=$(herdr-app status | sed -n 's/^ *"layout": *"\([^"]*\)".*/\1/p')
 	exit 1
 }
 if grep -q '"mod": *"readlist"' "$app/layouts/$shown.json" 2>/dev/null; then
-	echo "layout $shown already has the reading list"
+	# Already set up: add the docked preview block (`v`) if this layout predates it.
+	node "$repo/layout/add-to-sidebar.mjs" "$app/layouts/$shown.json"
 	exit 0
 fi
 clone=$shown-readlist

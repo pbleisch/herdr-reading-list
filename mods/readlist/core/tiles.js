@@ -1,4 +1,4 @@
-// Pure state for the HTML tile preview in the pane.
+// Pure state for the page tiles the built-in preview draws (HTML, Markdown and PDF).
 import { isAbsPath } from "./paths.js";
 export const TILE_HEIGHT = 512;
 

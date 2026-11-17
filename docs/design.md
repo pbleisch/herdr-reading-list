@@ -201,14 +201,16 @@ folder, with `from: "dropped"` and no toast (the person put it there; `shared("r
 - **A popup** for a quick look from anywhere: `mod.open:readlist` on `cmd-shift-i` (`ctrl-shift-i`
   on Linux and Windows, free in Herdr's shipped keys there; increment 3,
   the repo's `keys.json`, merged by the install only where the key is free). The popup is the same
-  mod drawn in a compact layout (no side preview; `p` shows it below the list); it takes the
+  mod drawn in a compact layout; it takes the
   keyboard when it opens, and Enter opens the item, saves the read mark, then closes the popup.
-- **The viewer**: `v` in any copy opens a preview-only pane (props `{role: "viewer"}`) by splitting
-  the current tab's last pane to the right, or closes it if it is open. It shows the item selected
-  last in any copy (`shared("readlist.selected")`), with the same renderer as the in-pane preview,
-  never opens an app and never marks read. `shared("readlist.viewer")` keeps its pane id, checked
-  against `panes()`, so a viewer closed by hand is noticed. With the keyboard, the viewer searches
-  the item it shows (`/`, `n`, Shift-N, Esc; 4.3).
+- **The docked preview**: `v` in any copy shows the built-in preview (4.8) docked full height just
+  right of the sidebar, in a hidden layout block (`readlist-viewer`, props `{role: "viewer"}`) the
+  install adds after the sidebar (`layout/add-to-sidebar.mjs`); `v` again hides it
+  (`layout.toggle`), and so do Esc and the **Hide** button in its header (`layout.hide`). `layout()` leaves hidden nodes out, so the mod reads the shown layout's file
+  to see whether the block is there; without it, `v` splits the current tab's last pane to the
+  right instead and `shared("readlist.viewer")` keeps that pane's id, checked against `panes()`.
+  It shows the item selected last in any copy (`shared("readlist.selected")`); its keys are the
+  preview's (4.8), where Enter opens and marks read as the list's Enter does.
 - Several copies can be alive (the sidebar block, a pane, the popup). They share `state.json`, so
   they agree; only one toasts (4.4).
 
@@ -221,31 +223,9 @@ note and who added it on the second; an accent dot while unread. Read items foll
 header. While the list holds the keyboard a hint line shows the keys. Under 160 px it becomes a
 rail: a bookmark icon with the unread count, then one icon per item with its unread dot.
 
-Wide pane (increment 2: list on the left, preview on the right; the filters are increment 3):
-
-```text
-+- Reading list  4 unread / 9 ------------- [All spaces v] [All agents v] [Unread] [Done] -+
-| > * [md]  plan.md                         claude t7 * idle  - x   2m |  # Rollout plan    |
-|           Revised rollout plan; section 3 changed after...           |                    |
-|   * [img] login-before-after.png          codex t12           x  14m |  ## 1. Scope       |
-|           Screenshot of the fixed login form                         |  We ship the new   |
-|   * [htm] coverage/index.html             server/t3 (ended)      server  1h |  login behind a    |
-|           Coverage after the refactor                                |  flag first...     |
-|   * [pdf] invoice-2026-10.pdf             inbox                    1h |                    |
-|     [md]  notes/standup.md                standup-bot              3h |  ## 2. Rollout     |
-|           Yesterday's summary                                        |  ...               |
-|  ---- read ----                                                      |                    |
-|     [url] github.com/x/y/pull/42          claude t7               1d |  [Open] [Review]   |
-+-----------------------------------------------------------------------+--------------------+
-| Enter open . Space Quick Look . r read . d done . R review . o reveal . / filter |
-+-------------------------------------------------------------------------------------------+
-```
-
-Narrow pane (under 520 px, from `on_size_change`, which includes the sidebar): the preview is
-hidden until `p`, then shows below the list at half the pane's height (at most 260 px) with a
-one-line header, since the row above already shows the note. `p` in a wide pane hides it. The
-preview follows the selection, never marks an item read and never opens an app; a copy remembers
-the `p` choice until the mod reloads.
+The list shows no preview of its own: Space opens the preview window and `v` the docked preview
+(4.8). (Increment 2 had a preview beside the list in a wide pane and below it after `p` in a
+narrow one; the built-in preview replaced it.)
 
 - **Row:** type icon (from the extension; `svg()` icons in the mod folder), title, note (one line,
   full on hover), who (program icon + address + live status dot, row 10), machine chip for remote
@@ -274,14 +254,14 @@ the sidebar's.
 
 Increment 1 has `j`/`k` and arrows, `g`/`G` and Home/End, Enter, Space (the Quick Look panel), `r`,
 `d`, `u`, Shift-D (delete) and Tab (switches between the list and the Done view); increment 2 adds
-`p`, `o` and `c`; increment 3 adds `/`, `f` and `v`; increment 4 adds Shift-R. The full set:
+`p` (since replaced by the built-in preview, 4.8), `o` and `c`; increment 3 adds `/`, `f` and `v`;
+increment 4 adds Shift-R. The full set:
 
 | Key | Action |
 |---|---|
 | `j` / `k`, arrows | move |
 | Enter | open in the default app (5); marks read |
-| Space | a preview, a toggle like Finder's Quick Look; does not mark read. Markdown, HTML, PDF and still images: the preview window inside Herdr (4.8); video and glTF: the browser viewer; other files: the macOS Quick Look panel (`qlmanage -p`, row 29). A link has no preview: a notice says Enter opens it |
-| `p` | show or hide the preview in the pane (4.2) |
+| Space | a preview, a toggle like Finder's Quick Look; does not mark read. The built-in preview window (4.8) for any file, or with **Space preview → System preview** the macOS Quick Look panel (`qlmanage -p`, row 29). A link has no preview: a notice says Enter opens it |
 | `o` | reveal in Finder (`open -R`); a link has nothing to reveal: a notice says so |
 | Shift-R | list this machine and every other machine again now (4.6) |
 | `r` | toggle read / unread |
@@ -292,17 +272,16 @@ Increment 1 has `j`/`k` and arrows, `g`/`G` and Home/End, Enter, Space (the Quic
 | `c` | copy the path (a link's URL), with a short notice |
 | `/` | filter box (title, note, path; every word must match). Enter or Down goes back to the list keeping the filter, Esc clears it |
 | `f` | the filter menu: space, agent, type, unread only |
-| `v` | open or close the viewer pane on the right (4.1) |
+| `v` | show or hide the docked preview right of the sidebar (4.1) |
 
-In the viewer pane (while it has the keyboard; a click gives it the keyboard) the keys scroll and
-search the item it shows, like `less` (`core/scroll.js`, `core/search.js`). The list's keys, its
-`/` filter included, are unchanged; the viewer used none of these before (it acts only on `v`), so
-nothing is shadowed.
+In the built-in preview (4.8; the window, and the docked preview or `rl preview` pane while it has
+the keyboard, which a click gives it) the keys scroll and search the item it shows, like `less`
+(`core/scroll.js`, `core/search.js`), besides Enter, Space, `q`, `o` and Esc (4.8).
 
 | Key | Action |
 |---|---|
 | `j` / `k`, Down / Up | scroll a line (40 px) |
-| Space / Shift-Space, Page Down / Page Up | scroll a page, less a line |
+| Shift-Space, Page Down / Page Up | scroll a page, less a line |
 | Ctrl-D / Ctrl-U | scroll half a page |
 | `g` / Shift-G, Home / End | the top / the bottom |
 
@@ -310,7 +289,7 @@ nothing is shadowed.
   remote HTML out at full height in a clipped box and moves them by an offset it keeps itself,
   measured with `on_size_change`. The wheel, trackpad, keys and search set this offset; a thumb
   on the right shows where it is, and a click on its track pages toward the click. Code and text
-  use the same readonly, syntax-highlighted `Editor` as the in-pane preview, with its native
+  use a readonly, syntax-highlighted `Editor`, with its native
   scrolling. The viewer's scroll keys cannot move the editor because its scroll position is not
   exposed. Another item starts at the top.
 
@@ -379,6 +358,10 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
 
 ### 4.5 Preview and open, per type (macOS; Linux and Windows below)
 
+This table is the increment-2 design of the preview beside the list. The built-in preview (4.8)
+now draws every surface; it keeps these renderers for text, code, images and thumbnails and
+draws local Markdown, HTML and PDF as page tiles, video as an FFmpeg frame.
+
 | Type | In-pane preview | Enter (open) |
 |---|---|---|
 | Markdown (`.md`, `.markdown`) | `TextView.markdown`, scrollable, links open through `on_link_click` (row 13); omd's thread block stripped | default app (`open`); later, Review in the review mod (5) |
@@ -439,8 +422,8 @@ script exits 127 and says what to install, and the mod shows that in a toast).
 - Space is GNOME Sushi: `org.gnome.NautilusPreviewer2.ShowFile(uri, '', close)` (the older
   `org.gnome.NautilusPreviewer.ShowFile(uri, 0, close)` second), D-Bus starting Sushi on demand;
   Space again on the same item passes `close` true. With no Sushi (`ServiceUnknown`), no session
-  bus or no `gdbus`, a one-time toast says so and Space shows or hides the in-pane preview
-  instead (in the narrow rail, the `v` pane).
+  bus or no `gdbus`, a one-time toast says so and Space opens the built-in preview window
+  instead (4.8).
   A call that fails another way (a timeout) is an error toast, and the next Space asks Sushi again.
 - Thumbnails: none (the handler passes). Images GPUI draws are copied into the cache and shown as
   on macOS; HTML draws as on macOS; PDF, other images and binary files show their type's icon with "Enter opens it".
@@ -460,7 +443,7 @@ each; the operations print what the scripts print, as UTF-8 with LF). The built-
   in `PATHEXT`.
 - Space is the QuickLook app (`QuickLook.exe PATH`; run again on the same item, it closes) or else
   PowerToys Peek (`PowerToys.Peek.UI.exe PATH`; it closes when it loses focus), found in their
-  per-user and all-users install folders; with neither, the in-pane preview as on Linux.
+  per-user and all-users install folders; with neither, the built-in preview window as on Linux.
 - Thumbnails: none (the handler passes); images GPUI draws are copied, other types show their icon.
 - `READLIST_DRY_RUN=1` makes the handler print `would: ...` and run nothing (tests).
 
@@ -529,7 +512,7 @@ calls in 4.5); the person may put their own in front of it.
   error, its first stderr line toasted (`core/handlers.js` `outcome`). Copy (`c`) is the
   clipboard, the same everywhere, so it is not an action.
 - **Order.** The person's handler (when on), then the built-in one, then the mod's fallback: the
-  browser (`cx.open_url`) for a link, the in-pane preview for Space (with a one-time toast giving
+  browser (`cx.open_url`) for a link, the built-in preview window for Space (with a one-time toast giving
   the built-in handler's stderr as the reason; it is not asked for a preview again), the type's icon
   for a thumbnail. A failure stops the chain. Each run is one `exec` of
   `sh bin/run-handler builtin|user ...` with a 15 s timeout (a thumbnail: `CACHE_SCRIPT` runs it with
@@ -571,29 +554,64 @@ calls in 4.5); the person may put their own in front of it.
   is asked. A process running as the person can swap the handler between the check and the run;
   that is not a boundary the mod can draw.
 
-### 4.8 The preview window
+### 4.8 The built-in preview
 
-Space on a Markdown, HTML, PDF or still-image item (with the default **Space preview → Built-in
-viewer**) opens this mod as a Herdr overlay window (`openOverlay` kind `window`, key
-`readlist-preview`, 820 px by 85 % of the window, props `{role: "window", file, title, source}`),
-so closing it leaves the person in Herdr. Herdr has no web view for mods, so the window shows a
-picture of the page: Markdown, HTML and PDF as the tiles of the in-pane HTML preview
-(`viewer/render.mjs`; Markdown through the host's rendered-Markdown route, PDF through the host's
-trusted `pages` view), images with the pane's image renderer. Links, selection, video and 3D are
-not interactive there; Enter (or **Enter · Interactive**) opens the browser viewer and closes the
-window. Video and glTF skip the window.
+One surface shows an item, whichever way it opened: Space (with the default **Space preview →
+Built-in viewer**) opens it as a Herdr overlay window (`openOverlay` kind `window`, key
+`readlist-preview`, 85 % of the window high, props `{role: "window", id, mtime, file, title,
+source}`), so closing it leaves the person in Herdr; `v` docks it (4.1, props `{role: "viewer"}`,
+following the selection); `rl preview` splits it as a pane (props `{role: "preview", file}`). The
+list itself shows no preview. Herdr has no web view for mods, so the surface shows the best
+picture of the file this machine can make (`renderSurface`, `surfaceBody`):
 
-- `shared("readlist.window")` is `{overlay, id, copy}` while it is open. Space in the list on its
-  item closes it, on another window type replaces its file in place (same key), on any other type
-  closes it first (`core/browser-viewer.js` `windowPlan`).
-- It takes the keyboard on open: Esc and Space close it, Enter goes interactive, the scroll keys of
-  the viewer pane (4.3) and the wheel scroll it, Backspace returns from a followed local link, and
-  `+`, `-`, `0` and the arrows zoom and pan an image. When it closes with the keyboard, it records
-  that in the shared value and the list that opened it takes the keyboard back.
+| Type | Drawn as |
+|---|---|
+| Markdown, HTML, PDF (local) | page tiles (`viewer/render.mjs`; Markdown through the host's rendered-Markdown route, PDF through its trusted `pages` view, the first 100 pages) |
+| Images GPUI draws | the image, fit, zoom and pan, on its stage (below) |
+| Video (local) | one frame, made by FFmpeg (`viewer/video-poster.mjs`, cached in `appHome()/readlist-poster-cache`), else the thumbnail below |
+| glTF | a still render (`viewer/render-model.mjs`) |
+| Text and code | the readonly highlighted `Editor` |
+| Markdown and HTML on another machine | `TextView` of the text |
+| Anything else | a Quick Look thumbnail (macOS; the handlers' `thumbnail`), else the type's icon with "Enter opens it in its app" |
+
+Links, selection, video and 3D are not interactive there. Its keys (`core/browser-viewer.js`
+`SURFACE_KEYS`), also buttons in its header: Enter opens the file in its default app as the list's
+Enter does (revealing a file that could run) and marks the item read (the docked one through the
+list's `open`; the window writes the mark into `state.json` itself, compare-and-swap, and every
+list copy sees it through its folder watch); Space opens the interactive browser viewer (the window
+then closes); `q` the platform's preview window through the handlers (`q` again closes it); `o`
+reveals; Esc closes the window or the `rl preview` pane, or hides the docked preview. Video and models open in the browser
+viewer only from here: Space in the list always opens the built-in preview.
+
+- `shared("readlist.window")` is `{overlay, id, copy}` while the window is open. Space in the list
+  on its item closes it, on another item replaces its file in place (same key), and closes it
+  before the platform's preview opens (`windowPlan`). With **System preview** and no preview
+  window on the platform (Linux without Sushi, Windows without QuickLook or Peek), Space opens
+  the built-in window and a one-time toast says why.
+- It takes the keyboard on open; the scroll keys (4.3) and the wheel scroll it, Backspace returns
+  from a followed local link, and `+`, `-`, `0`, `b` and the arrows zoom, change the background
+  and pan an image. When it closes with the keyboard, it records that in the shared value and the
+  list that opened it takes the keyboard back.
+- Width: 70 % of the Herdr window (its logical width from `appHome()/window.json`), kept between
+  640 and 1280 px so lines stay readable; a share when that file cannot be read. `]` / `[` (and
+  `=` / `-` unless an image shows, where they zoom) step it by 15 %, between 480 px and the Herdr
+  window's width, and keep it in `shared("readlist.window-width")` for next time. Herdr has no
+  command to resize an overlay, so the window opens again under its key, in its place, at the new
+  width with the same share scrolled; the tiles are drawn at the width the window measures, so
+  they stay sharp. `shared("readlist.window")` reads `overlay: "resizing"` meanwhile, so the old
+  copy closing does not hand the keyboard back to the list. The docked preview resizes its layout
+  block instead (`layout.resize`).
+- Images are drawn on a stage that stands apart from the pane: a
+  checkerboard of shipped tiles (`images/checker-dark.png` or `-light.png`, by the theme) so
+  transparency shows, or plain dark or light gray; `b` and the **Background** button cycle it,
+  kept in `shared("readlist.image-bg")`. The image's pixel size is read from the first 64 KiB of
+  its cached copy (`head64` helper, base64, parsed in `core/image.js` for PNG, GIF, JPEG, WebP and
+  BMP), so it is drawn in its own fitted rectangle with a thin border; SVG and anything unread
+  fill the view without one.
 - A PDF shows its first 100 pages, with a note when there are more. The renderer gets up to five
-  minutes in the window (60 s in the pane).
-- Without Node.js or a headless browser, it shows the pane's text preview (Markdown and HTML) or
-  a note (PDF); Enter still tries the browser viewer.
+  minutes in the window (60 s elsewhere).
+- Without Node.js or a headless browser, it shows the text (Markdown and HTML) or a note (PDF);
+  without FFmpeg a video shows its thumbnail; Space still tries the browser viewer.
 
 The browser viewer itself (docs/viewer-contract.md): on macOS with Chrome every open launches a
 new app window in front, and the older page closes itself when the host says a newer one spoke,

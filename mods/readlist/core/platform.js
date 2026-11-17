@@ -36,6 +36,6 @@ export const WINDOWS_RUNS = new Set([
 // Space when no handler showed a preview window: why, in one line, for the toast. `reason`
 // is what the built-in handler said when it passed (Linux: Sushi or gdbus is missing).
 export function noQuickLook(reason) {
-  if (reason) return `${reason}; showing the preview here instead.`;
-  return "There is no quick preview on this platform yet; the preview here shows the file.";
+  if (reason) return `${reason}; showing the built-in preview instead.`;
+  return "There is no quick preview window on this platform yet; showing the built-in preview instead.";
 }

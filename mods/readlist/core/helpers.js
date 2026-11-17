@@ -14,6 +14,10 @@ import { DECODE_SCRIPT, CHUNKS_SCRIPT, PRUNE_COPIES_SCRIPT, CHUNK_MIB } from "./
 import { THUMB_SECONDS } from "./handlers.js";
 import { joinPath } from "./paths.js";
 import { PWSH, PWSH_ARGS, WIN_HELPER, WIN_RL, WIN_DIR } from "./windows.js";
+import { IMAGE_HEAD_BYTES } from "./image.js";
+
+// The first bytes of an image as one line of base64, to read its size (core/image.js).
+export const HEAD64_SCRIPT = `head -c ${IMAGE_HEAD_BYTES} -- "$1" | base64 | tr -d '\\n'`;
 
 // Makes the list folder (and items/, inbox/) and prints its real path.
 export const DIR_SCRIPT = 'd=${READING_LIST_DIR:-$HOME/.local/state/reading-list}; mkdir -p "$d/items" "$d/inbox" && cd "$d" && pwd -P';
@@ -25,6 +29,7 @@ export const SCRIPTS = {
   stats: STATS_SCRIPT,
   stat1: STAT1_SCRIPT,
   head: HEAD_SCRIPT,
+  head64: HEAD64_SCRIPT,
   listdir: LIST_DIR_SCRIPT,
   "safe-path": SAFE_PATH_SCRIPT,
   cache: CACHE_SCRIPT,
@@ -56,6 +61,7 @@ export function helperCall(platform, modDir, op, args = []) {
   }
   let a = args;
   if (op === "head") a = [...args, String(TEXT_BYTES)];
+  else if (op === "head64") a = [...args, String(IMAGE_HEAD_BYTES)];
   else if (op === "listdir") a = [...args, String(FOLDER_ENTRIES)];
   else if (op === "chunks") a = [...args, String(CHUNK_MIB)];
   else if (op === "scan") a = [args[0] ?? "", String(LINE_MAX), ...args.slice(1)];

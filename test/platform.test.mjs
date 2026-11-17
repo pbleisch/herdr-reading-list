@@ -46,11 +46,11 @@ test("previewKind asks the handlers for a thumbnail on every platform", () => {
   assert.deepEqual(THUMB, { how: "thumb" });
 });
 
-test("noQuickLook says why Space shows the preview here, in one line", () => {
+test("noQuickLook says why Space shows the built-in preview, in one line", () => {
   assert.equal(noQuickLook("Space's preview window needs GNOME Sushi (the sushi package)"),
-    "Space's preview window needs GNOME Sushi (the sushi package); showing the preview here instead.");
+    "Space's preview window needs GNOME Sushi (the sushi package); showing the built-in preview instead.");
   assert.equal(noQuickLook("Space's preview window needs gdbus and GNOME Sushi"),
-    "Space's preview window needs gdbus and GNOME Sushi; showing the preview here instead.");
+    "Space's preview window needs gdbus and GNOME Sushi; showing the built-in preview instead.");
   assert.match(noQuickLook(null), /no quick preview/);
   assert.match(noQuickLook(""), /no quick preview/);
   for (const m of [noQuickLook("x"), noQuickLook(null)]) assert.doesNotMatch(m, /\n/);

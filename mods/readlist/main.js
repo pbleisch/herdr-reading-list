@@ -21,11 +21,11 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, Scrollbar, VirtualListScrollHandle, TextView, Editor, EditorState, InputState, Input } from "gpui-base";
 import { exec, hc, readTextFile, writeTextFile, watchFolder, nextCommand, agents, spaces, panes, focused, machines, theme, settings, layout, props, notify, appHome, run, shared, setShared, openOverlay, closeOverlay, window as appWindow } from "herdr";
 import { parseListing, parseStats, typeOf, openAction, itemFile, itemKey } from "./core/items.js";
-import { WIDE, TEXT_BYTES, THUMB, parseStat, previewKind, plainCodeFallback, previewShown, thumbSize, cacheName, previewText, stripThreads, readableHtml, htmlText, copyText } from "./core/preview.js";
+import { WIDE, TEXT_BYTES, THUMB, parseStat, previewKind, plainCodeFallback, thumbSize, cacheName, previewText, stripThreads, readableHtml, htmlText, copyText } from "./core/preview.js";
 import { platformOf, words, noQuickLook } from "./core/platform.js";
 import { TIMEOUT_MS, THUMB_SECONDS, TRUST_FILE, userHandler, chain, checkCall, runChain, token, outcome, parseTrust, serializeTrust, parseCheck, handlerState, handlerBanner } from "./core/handlers.js";
 import { helperCall, rlFile, rlSource } from "./core/helpers.js";
-import { joinPath } from "./core/paths.js";
+import { joinPath, baseName } from "./core/paths.js";
 import { FOLDER_DEPTH, FOLDER_ENTRIES, folderPath, folderItems, parseFolder } from "./core/folder.js";
 import { noPwsh, NEEDS_PWSH } from "./core/windows.js";
 import { parseState, serializeState, applyAction, prune, rowsFor, counts, ago, who, isRead, isDone, isChanged, withInbox } from "./core/state.js";
@@ -34,10 +34,11 @@ import { BURST_MS, arrivalKey, arrivals, claim, owners, quiet, quietIds, toastFo
 import { parseInbox, inboxPlan } from "./core/inbox.js";
 import { isClaudeAgent, foregroundPid, parseScan, sentPlan, sentOn, setSent, sentAddArgs } from "./core/sent.js";
 import { viewerPane, newPane, selectedId, takesCommand, splitTarget, previewItem, previewPanePlan } from "./core/viewer.js";
-import { browserViewerType, spacePreviewRoute, viewerFailureNotice, WINDOW_KEY, WINDOW_SIZE, windowAction, windowPlan, pagesNote } from "./core/browser-viewer.js";
+import { browserViewerType, spacePreviewRoute, viewerFailureNotice, WINDOW_KEY, WINDOW_HEIGHT, windowAction, windowPlan, pagesNote, herdrWidth, windowWidth, resizedWidth, windowResizeKey } from "./core/browser-viewer.js";
 import { previewMode, withPreviewMode } from "./core/preview-setting.js";
 import { findMatches, firstFrom, step, matchLabel, wrapRows, rowOf, segments } from "./core/search.js";
 import { SCROLL_KEYS, keyOffset, wheelOffset, centerOffset, alignOffset, clampOffset, maxOffset, visibleRows, thumb, trackOffset } from "./core/scroll.js";
+import { IMAGE_BACKGROUND_LABEL, IMAGE_GRAYS, CHECKER_TILE, imageBackground, nextImageBackground, checkerTiles, fromBase64, imageSize, fittedRect } from "./core/image.js";
 import { darkBackground, tileFallback, tileSlots, tileLinkAt, followTileLink, backTileLink } from "./core/tiles.js";
 import { NAME } from "./core/name.js";
 import { INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
@@ -58,7 +59,7 @@ const ROW = 46, HEAD = 30, RAIL_ROW = 28;
 const KEYS = {
   down: "down", j: "down", up: "up", k: "up", home: "top", g: "top", end: "bottom", "shift-g": "bottom",
   enter: "open", space: "preview", r: "read", d: "done", u: "undo", "shift-d": "delete", tab: "view",
-  p: "pane", o: "reveal", c: "copy", "/": "find", f: "filter", v: "viewer", "shift-r": "refresh",
+  o: "reveal", c: "copy", "/": "find", f: "filter", v: "viewer", "shift-r": "refresh",
 };
 // Search in the viewer (core/search.js): its text size and row height, and a monospace
 // character's width as a share of the size (a little over most code fonts' 0.6), which sets
@@ -66,9 +67,6 @@ const KEYS = {
 const SEARCH_FONT = 12, SEARCH_LINE = 18, MONO_WIDTH = 0.62;
 // The space above the first row and below the last when the viewer draws text as rows.
 const ROWS_PAD = 6;
-// The preview's height when it shows below the list (a narrow pane, after `p`): half the
-// pane, at most BELOW.
-const BELOW = 260;
 // Cached images and thumbnails: hidden, so writing them does not reload the mod (row 17).
 const CACHE = `${MOD}/.cache/local`;
 const PREVIEW_CACHE = `${MOD}/.cache/preview`;
@@ -84,7 +82,14 @@ const TOASTED = "readlist.toasted", QUIET = "readlist.quiet", UNREAD = "readlist
 const SELECTED = "readlist.selected", VIEWER = "readlist.viewer", PREVIEW_PANE = "readlist.preview-pane", PICK = "readlist.pick";
 // The preview window open now: { overlay, id (item key), copy (the list that opened it) };
 // when it closes, { overlay: null, closed, copy, keyboard } says whether it had the keyboard.
-const WINDOW = "readlist.window";
+// WINDOW_WIDTH is the width in px the person last chose with `[` / `]`.
+const WINDOW = "readlist.window", WINDOW_WIDTH_KEY = "readlist.window-width";
+// The background behind an image preview the person chose with `b` (core/image.js).
+const IMAGE_BG = "readlist.image-bg";
+// The layout block the docked `v` preview lives in (layout/add-to-sidebar.mjs), hidden until `v`.
+const VIEWER_NODE = "readlist-viewer";
+// Video posters made with FFmpeg (viewer/video-poster.mjs), outside the watched mods/ tree.
+const POSTER_CACHE = "readlist-poster-cache";
 // Rendering a long PDF for the window takes longer than a page of HTML.
 const TILE_TIMEOUT_MS = 60000, WINDOW_TILE_TIMEOUT_MS = 300000;
 const KEYBOARD = "readlist.keyboard";
@@ -162,10 +167,7 @@ export default class ReadingList extends View {
     this.sel = null;
     this.error = null;
     this.loaded = false;
-    // The preview: `choice` is the person's `p` (null until they press it; the popup starts
-    // with it off), `pv` what it shows, `gen` counts reloads so the selected item's preview
-    // follows file changes.
-    this.choice = this.popup() ? false : null;
+    // The preview a surface shows (`pv`); `gen` counts reloads so it follows file changes.
     this.pv = null;
     this.folder = null;
     this.gen = 0;
@@ -310,6 +312,8 @@ export default class ReadingList extends View {
   initWindow(cx) {
     const p = props() ?? {};
     this.transient = typeof p.file === "string" && p.file ? { ...previewItem(p.file), title: p.title || previewItem(p.file).title } : null;
+    // Reopened at another width: back to the same share of the way down.
+    this.restoreShare = Number.isFinite(p.at) && p.at > 0 ? Math.min(1, p.at) : null;
     this.handle.focus();
     cx.timer.after(300, () => this.handle.focus());
     cx.spawn(async (cx) => {
@@ -430,8 +434,7 @@ export default class ReadingList extends View {
     // The window going: the list that opened it takes the keyboard back if the window had it.
     const open = shared(WINDOW);
     if (this.role() === "window" && open?.overlay && open.overlay === props()?.overlay) {
-      setShared(WINDOW, { overlay: null, closed: open.overlay, copy: open.copy,
-        keyboard: this.handle.is_focused() || this.tileHandle.is_focused() });
+      setShared(WINDOW, { overlay: null, copy: open.copy, keyboard: this.handle.is_focused() || this.tileHandle.is_focused() });
     }
   }
 
@@ -1125,57 +1128,45 @@ export default class ReadingList extends View {
     });
   }
 
-  // Space: supported rich types use the chosen viewer after the person's handler has
-  // had its chance. Other types use the platform handler. The native pane is the fallback.
-  // None of these mark the item read or change Enter's reveal rule.
+  // Space: the built-in preview window (any file) or the platform's preview window, as the
+  // person chose in the `f` menu, after the person's own handler has had its chance. Space
+  // again on the same item closes what it opened. Without a platform preview window, the
+  // built-in one. None of these mark the item read or change Enter's reveal rule.
   async preview(item, cx) {
     const folder = item.folderKind === "d" || (!item.folderRoot && this.fs[itemKey(item)] === "d");
     if (!folder && !(await this.safeFolderItem(item, cx))) return;
     const list = await this.handlers();
     const key = itemKey(item);
     const route = spacePreviewRoute(item, await this.readPreviewMode().catch(() => "builtin"));
-    const browser = route === "browser", windowed = route === "window";
     // The preview window: Space again on its item closes it; another item replaces what it
-    // shows, in its place; any other kind of preview closes it first.
+    // shows, in its place; the platform's preview closes it first.
     const plan = windowPlan(shared(WINDOW), key, route);
     if (plan === "toggle" || plan === "close") {
       closeOverlay(shared(WINDOW).overlay);
       setShared(WINDOW, { overlay: null });
-      this.windowOverlay = null;
+      this.windowOpen = false;
       if (plan === "toggle") return;
     }
-    if (this.browserPreview) {
-      const same = this.browserPreview === key;
-      this.browserPreview = null;
-      await this.browserViewer("close").catch(() => {});
-      if (same && browser) return;
-    }
-    // The preview window open now: Space again on its item closes it (and shows it again
-    // when there was nothing to close); on another item, its handler is told first.
+    // A platform preview window open now: Space again on its item closes it (and shows it
+    // again when there was nothing to close); on another item, its handler is told first.
     const open = this.quicklook;
     this.quicklook = null;
     if (open) {
       const same = open.id === key;
       const r = await this.runAction("preview-close", open.path, { only: open.who, list, extra: () => [open.token, same ? "same" : "other"] }, cx);
-      if (same && r.status === "ok" && (open.who === "user" || route === "system")) return;
+      if (same && r.status === "ok") return;
     }
     if (folder) {
       notify({ title: "Reading list", body: "Browse folders in the reading list with Enter.", level: "info" });
       return;
     }
-    if (browser || windowed) {
-      let path = item.path;
-      if (item.machine) {
-        const copy = await this.copyFor(item, "Space");
-        if (!copy) return;
-        path = copy.path;
-      } else {
-        const st = await this.helper("stat", [path]).catch(() => null);
-        if (st?.stdout.trim() !== "f" && st?.stdout.trim() !== "x") {
-          notify({ title: "Reading list", body: `${item.title} is gone: ${path}`, level: "warning" });
-          return;
-        }
-      }
+    if (!item.path) {
+      notify({ title: "Reading list", body: "A link has no preview; Enter opens it.", level: "info" });
+      return;
+    }
+    const path = await this.localPath(item, "Space");
+    if (!path) return;
+    if (route === "window") {
       const user = await this.runAction("preview", path, { list, only: "user" }, cx);
       if (user.status === "ok") {
         this.quicklook = { id: key, path, who: "user", token: token(user.stdout) };
@@ -1185,58 +1176,52 @@ export default class ReadingList extends View {
         notify({ title: "Reading list", body: `Couldn't preview ${item.title}: ${user.message}`, level: "error" });
         return;
       }
-      if (windowed) return this.openWindow(item, key, path);
-      const opened = await this.browserViewer("open", path).catch((e) => ({ code: null, stderr: String(e?.message ?? e) }));
-      if (opened?.code === 0) { this.browserPreview = key; return; }
-      const notice = viewerFailureNotice(opened);
-      if (notice) {
-        notify({ title: "Reading list", body: notice, level: "error" });
+      return this.openWindow(item, key, path);
+    }
+    if (await this.systemPreview(key, path, list, cx) === "pass") {
+      if (!this.lookHinted) {
         this.lookHinted = true;
+        notify({ title: "Reading list", body: noQuickLook(this.noLook?.reason), level: "info", timeout: 6000 });
       }
-      return this.previewHere(item, cx, "The browser viewer could not open; the preview is shown in the pane.");
+      return this.openWindow(item, key, path);
     }
-    if (!list.some((h) => !(h.who === "builtin" && this.noLook))) return this.previewHere(item, cx);
-    if (!item.path) {
-      notify({ title: "Reading list", body: this.platform === "macos" ? "Quick Look has no preview for a link; Enter opens it." : "A link has no preview window; Enter opens it.", level: "info" });
-      return;
-    }
-    // Another machine's file: the preview window shows its local copy.
-    let path = item.path;
-    if (item.machine) {
-      const c = await this.copyFor(item, "Space");
-      if (!c) return;
-      path = c.path;
-    } else {
-      const st = await this.helper("stat", [item.path]).catch(() => null);
-      if (st?.stdout.trim() !== "d" && st?.stdout.trim() !== "f" && st?.stdout.trim() !== "x") {
-        notify({ title: "Reading list", body: `${item.title} is gone: ${item.path}`, level: "warning" });
-        return;
-      }
-    }
-    const r = await this.runAction("preview", path, { list }, cx);
-    if (r.status === "pass") return this.previewHere(item, cx);
-    if (r.status !== "ok") {
-      notify({ title: "Reading list", body: `Couldn't preview ${item.title}: ${r.message}`, level: "error" });
-      return;
-    }
-    this.quicklook = { id: key, path, who: r.who, token: token(r.stdout) };
   }
 
-  // The preview window for `item` (its local file, or a fetched copy at `path`).
-  openWindow(item, key, path) {
-    const overlay = openOverlay({ mod: NAME, kind: "window", key: WINDOW_KEY, ...WINDOW_SIZE,
-      props: { role: "window", file: path, title: item.title, source: item.machine && item.path ? `${item.machine}:${item.path}` : null } });
-    this.windowOverlay = overlay;
+  // The local file for `item`: the file itself when it is still there, or another machine's
+  // fetched copy; null (with a toast) when it is gone or the copy was not fetched.
+  async localPath(item, press) {
+    if (item.machine) return (await this.copyFor(item, press))?.path ?? null;
+    const st = await this.helper("stat", [item.path]).catch(() => null);
+    if (st?.stdout.trim() === "f" || st?.stdout.trim() === "x") return item.path;
+    notify({ title: "Reading list", body: `${item.title} is gone: ${item.path}`, level: "warning" });
+    return null;
+  }
+
+  // The preview window for `item` (its local file, or a fetched copy at `path`), at the width
+  // the person chose last, else the default share of the Herdr window.
+  async openWindow(item, key, path) {
+    const herdr = herdrWidth(await readTextFile(this.herdrWindowPath()).catch(() => null));
+    const overlay = openOverlay({ mod: NAME, kind: "window", key: WINDOW_KEY, width: windowWidth(shared(WINDOW_WIDTH_KEY), herdr), height: WINDOW_HEIGHT,
+      props: { role: "window", id: key, mtime: this.mt[key] ?? null, file: path, title: item.title, source: item.machine && item.path ? `${item.machine}:${item.path}` : null } });
+    this.windowOpen = true;
     setShared(WINDOW, { overlay, id: key, copy: this.copy });
   }
 
-  // The window this copy opened has closed: take the keyboard back if it had it.
+  // Where Herdr keeps its window's size.
+  herdrWindowPath() {
+    return joinPath(appHome(), "window.json");
+  }
+
+  // The window this copy opened has closed: take the keyboard back if it had it. A window
+  // reopened at another width is still open.
   windowClosed(cx) {
     const open = shared(WINDOW);
-    if (!this.windowOverlay || open?.overlay === this.windowOverlay) return;
-    const back = open?.closed === this.windowOverlay && open.keyboard;
-    this.windowOverlay = null;
-    if (back) cx.timer.after(0, () => this.focus());
+    if (!this.windowOpen || open?.overlay) {
+      if (open?.overlay && open.copy !== this.copy) this.windowOpen = false;
+      return;
+    }
+    this.windowOpen = false;
+    if (open?.copy === this.copy && open.keyboard) cx.timer.after(0, () => this.focus());
   }
 
   browserViewer(action, path) {
@@ -1272,17 +1257,6 @@ export default class ReadingList extends View {
         cx.notify();
       }
     });
-  }
-
-  // Space without a preview window: shows or hides the in-pane preview (as `p` does), or in
-  // the narrow rail opens the viewer pane (as `v`). The first time, a toast says why.
-  previewHere(item, cx, reason = null) {
-    if (!this.lookHinted) {
-      this.lookHinted = true;
-      notify({ title: "Reading list", body: reason ?? noQuickLook(this.noLook?.reason), level: "info", timeout: 6000 });
-    }
-    if (this.rail()) return this.toggleViewer({ item }, cx);
-    this.choice = !previewShown(this.width, this.choice);
   }
 
   // The in-pane preview of `item`, at most one being made at a time; the latest selection
@@ -1358,8 +1332,16 @@ export default class ReadingList extends View {
     }
     if (kind.how === "missing" || kind.how === "url") return { ...base, how: kind.how };
     if (kind.how === "folder") return { ...base, how: "folder" };
-    // The window draws a PDF's pages as tiles, so no thumbnail is made.
-    if (this.role() === "window" && !on && browserViewerType(item) === "pdf") return { ...base, how: "pdf", file: item.path };
+    // A surface draws a PDF's pages as tiles, so no thumbnail is made; a video shows a frame
+    // FFmpeg made, else the thumbnail below.
+    if (!on && browserViewerType(item) === "pdf") return { ...base, how: "pdf", file: item.path };
+    if (!on && browserViewerType(item) === "video") {
+      const script = joinPath(appHome(), MOD, "viewer", "video-poster.mjs");
+      const r = await exec("node", [script, item.path, joinPath(appHome(), POSTER_CACHE)], { timeout: 40000 }).catch(() => null);
+      let poster = null;
+      try { poster = r?.code === 0 ? JSON.parse(r.stdout) : null; } catch { /* no poster */ }
+      if (/^[a-f0-9]{20}$/.test(poster?.key ?? "")) return { ...base, how: "image", src: `${POSTER_CACHE}/${poster.key}/poster.png`, poster: true };
+    }
     if (kind.how === "model") {
       if (!on) return { ...base, how: "model", file: item.path, mtime: st.mtime, size: st.size };
       kind = THUMB; // The remote copy does not contain a .gltf file's sibling assets.
@@ -1560,11 +1542,39 @@ export default class ReadingList extends View {
   }
 
   // v: opens the viewer pane on the right, or closes it (core/viewer.js).
+  // `v`: the built-in preview docked full height right of the sidebar (the layout's VIEWER_NODE
+  // block, layout/add-to-sidebar.mjs), following the selection; `v` again hides it. A layout
+  // without that block gets a pane split on the right of the tab instead.
   toggleViewer(cur, cx) {
     const was = shared(VIEWER);
     // The same toggle may reach a copy twice (a key and its command): once is enough.
     if (typeof was?.at === "number" && Date.now() - was.at < 400) return;
-    const open = viewerPane(was, panes());
+    setShared(VIEWER, { ...was, at: Date.now() });
+    cx.spawn(async (cx) => {
+      if (!(await this.hasDock())) return this.toggleViewerPane(cur, cx);
+      if (cur) setShared(SELECTED, { id: itemKey(cur.item), item: cur.item.folderRoot ? cur.item : null, at: Date.now() });
+      run("layout.toggle", { id: VIEWER_NODE });
+      // The list keeps the keyboard, so moving through it moves the docked preview.
+      if (this.role() !== "viewer") this.handle.focus();
+    });
+  }
+
+  // Whether the shown layout has the dock block. layout() leaves hidden nodes out, so its file
+  // is read (shared("layout") names it).
+  async hasDock() {
+    if (find(layout(), VIEWER_NODE)) return true;
+    const name = shared("layout");
+    if (typeof name !== "string" || !/^[\w.-]+$/.test(name)) return false;
+    try {
+      return Boolean(find(JSON.parse(await readTextFile(joinPath(appHome(), "layouts", `${name}.json`)) ?? "null"), VIEWER_NODE));
+    } catch {
+      return false;
+    }
+  }
+
+  // `v` in a layout without the dock: a preview pane split on the right of the tab.
+  toggleViewerPane(cur, cx) {
+    const open = viewerPane(shared(VIEWER), panes());
     if (open) {
       run("pane.close", { pane: open });
       setShared(VIEWER, { pane: null, at: Date.now() });
@@ -1701,11 +1711,6 @@ export default class ReadingList extends View {
           if (!cur.item.folderRoot) this.select(after());
           this.remove(cur.item, cx);
         }
-        break;
-      case "pane":
-        this.choice = !previewShown(this.width, this.choice);
-        // The list may have shrunk under the preview: keep the selection in view.
-        if (cur) this.scroll.scroll_to_item(rows.indexOf(cur));
         break;
       case "reveal": if (cur) cx.spawn(async (cx) => { await this.reveal(cur.item, cx); cx.notify(); }); break;
       case "copy":
@@ -2010,9 +2015,10 @@ export default class ReadingList extends View {
     cx.notify();
   }
 
-  // Image keys: + and - zoom, 0 fits, arrows pan. True when handled.
+  // Image keys: + and - zoom, 0 fits, arrows pan, b changes the background. True when handled.
   imageKey(k, cx) {
-    if (k === "+" || k === "=") this.imageZoomBy(1.25, cx);
+    if (k === "b") setShared(IMAGE_BG, nextImageBackground(shared(IMAGE_BG)));
+    else if (k === "+" || k === "=") this.imageZoomBy(1.25, cx);
     else if (k === "-") this.imageZoomBy(1 / 1.25, cx);
     else if (k === "0") this.imageFit(cx);
     else if (k === "left") this.imagePan.x -= 30;
@@ -2024,12 +2030,31 @@ export default class ReadingList extends View {
     return true;
   }
 
+  // The pixel size of the image the preview draws (its copy in the cache), read once per file
+  // from its first bytes, so it can be drawn in its own rectangle with a border; null until
+  // known, or for a format whose size cannot be read (SVG).
+  wantImageSize(src, cx) {
+    if (this.imageSizeOf?.src === src) return this.imageSizeOf.size;
+    this.imageSizeOf = { src, size: null };
+    cx.spawn(async (cx) => {
+      const r = await this.helper("head64", [joinPath(appHome(), src)]).catch(() => null);
+      const size = r?.code === 0 ? imageSize(fromBase64(r.stdout)) : null;
+      if (this.imageSizeOf?.src !== src || !size) return;
+      this.imageSizeOf = { src, size };
+      cx.notify();
+    });
+    return null;
+  }
+
   imageBody(pv, t, cx) {
     if (this.imageViewKey !== pv.src) {
       this.imageViewKey = pv.src;
       this.imageZoom = 1;
       this.imagePan = { x: 0, y: 0 };
     }
+    const size = this.wantImageSize(pv.src, cx);
+    const bg = imageBackground(shared(IMAGE_BG));
+    const dark = darkBackground(t.background);
     const changeZoom = (factor, cx) => this.imageZoomBy(factor, cx);
     const fit = (cx) => this.imageFit(cx);
     const button = (label, action) => div().px(7).py(3).rounded(4).bg(t.chrome).cursor_pointer()
@@ -2044,7 +2069,8 @@ export default class ReadingList extends View {
         .child(button("−", (cx) => changeZoom(1 / 1.25, cx)))
         .child(div().px(3).child(`${Math.round(zoom * 100)}%`))
         .child(button("+", (cx) => changeZoom(1.25, cx)))
-        .child(div().px(5).child("Wheel: zoom · arrows: pan")))
+        .child(button(`Background: ${IMAGE_BACKGROUND_LABEL[bg]}`, (cx) => this.imageKey("b", cx)))
+        .child(div().px(5).child(pv.poster ? "A frame of the video · Space plays it" : pv.thumb ? "A thumbnail · Enter opens the file" : "Wheel: zoom · arrows: pan · b: background")))
       .child(div().relative().flex_1().min_h(0).overflow_hidden()
         .on_size_change((size, cx) => {
           const factor = settings().zoom ?? 1;
@@ -2055,11 +2081,18 @@ export default class ReadingList extends View {
         })
         .on_mouse_down("left", (_event, cx) => { this.tileHandle.focus(); cx.stop_propagation(); })
         .on_scroll_wheel((event, cx) => { changeZoom((event.delta?.y ?? 0) < 0 ? 1.2 : 1 / 1.2, cx); cx.stop_propagation(); })
+        // A stage that stands apart from the pane: a checkerboard (transparency shows) or a
+        // plain gray, the image in its own rectangle with a thin border once its size is known.
+        .when(bg !== "checker", (el) => el.bg(IMAGE_GRAYS[bg]))
+        .when(bg === "checker" && width > 0 && height > 0, (el) => el.children(checkerTiles(width, height).map((tile) =>
+          image(`${MOD}/images/checker-${dark ? "dark" : "light"}.png`).absolute().left(tile.x).top(tile.y).w(CHECKER_TILE).h(CHECKER_TILE))))
         .child(width && height
-          ? image(pv.src).absolute()
-            .left(Math.round((width - width * zoom) / 2 + this.imagePan.x))
-            .top(Math.round((height - height * zoom) / 2 + this.imagePan.y))
-            .w(Math.round(width * zoom)).h(Math.round(height * zoom))
+          ? (() => {
+            const r = fittedRect({ width, height }, size, zoom, this.imagePan);
+            return div().absolute().left(r.left).top(r.top).w(r.width).h(r.height)
+              .when(Boolean(size), (el) => el.border_1().border_color(bg === "light" || (bg === "checker" && !dark) ? "#00000040" : "#ffffff40"))
+              .child(image(pv.src).size_full());
+          })()
           : image(pv.src).size_full()));
   }
 
@@ -2135,7 +2168,8 @@ export default class ReadingList extends View {
       .on_key_down((event, cx) => {
         const k = event.keystroke;
         if ((k === "backspace" || k === "alt-left") && this.tileBack(cx)) { cx.stop_propagation(); return; }
-        if (!SCROLL_KEYS[k] || !this.tileShown || (k === "space" && this.role() !== "viewer")) return;
+        // Space is the surfaces' browser-viewer key (and the list's preview key), never a scroll.
+        if (!SCROLL_KEYS[k] || !this.tileShown || k === "space") return;
         this.scrollTo(this.tileShown, keyOffset(k, this.tileShown), cx);
         cx.stop_propagation();
       })
@@ -2186,9 +2220,9 @@ export default class ReadingList extends View {
       case "icon":
         return v_flex().flex_1().min_h(0).p(14).gap(12).items_center().justify_center()
           .child(svg(`${ICONS}/${ICON[pv.type] ?? "file"}.svg`).size(48).text_color(t.muted))
-          .child(div().text_size(12).text_color(t.dim).child(this.platform === "linux" && !this.noLook
-            ? "No thumbnail for this type here. Enter opens it; Space shows it in GNOME Sushi."
-            : "No thumbnail for this type here. Enter opens it."));
+          .child(div().text_size(12).text_color(t.dim).child(this.platform === "macos"
+            ? "No preview for this type here. Enter opens it in its app; q shows it in Quick Look."
+            : "No preview for this type here. Enter opens it in its app; q shows it in a preview window if one is installed."));
       case "offline":
         return v_flex().p(14).gap(8).items_start()
           .child(div().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("offline"))
@@ -2204,44 +2238,17 @@ export default class ReadingList extends View {
     }
   }
 
-  // `how`: "side" (right of the list), "below" (under it) or "full" (the viewer pane).
-  previewPane(item, how, t, cx) {
-    const roomy = how !== "below";
-    const k = itemKey(item);
-    const where = this.tileNav?.id === k && this.tileNav.history.length ? this.tileNav.file
-      : item.machine && item.path ? `${item.machine}:${item.path}` : item.path ?? item.url;
-    // Another machine's file: where the preview comes from.
-    const source = !item.machine || !item.path ? null
-      : this.fetched.has(k) ? `${fetchedLabel(item.machine, this.fetched.get(k))}; edits to the copy stay on ${words(this.platform).here}`
-      : `on ${item.machine}`;
-    return v_flex().id("rl-preview").min_w(0).min_h(0).bg(t.background)
-      .when(how === "side", (el) => el.flex_1().h_full().border_l(1).border_color(t.border))
-      .when(how === "full", (el) => el.flex_1().size_full())
-      .when(how === "below", (el) => el.h(Math.round(Math.min(BELOW, (this.height ?? 2 * BELOW) / 2))).flex_none().border_t(1).border_color(t.border))
-      .child(v_flex().px(14).pt(roomy ? 10 : 8).pb(roomy ? 8 : 6).gap(2).flex_none().border_b(1).border_color(t.border)
-        .child(h_flex().min_w(0).items_center().gap(8)
-          .when(Boolean(this.tileNav?.id === k && this.tileNav.history.length), (el) => el.child(div().id("rl-tile-back")
-            .flex_none().cursor_pointer().text_size(11).text_color(t.accent)
-            .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-            .on_click((_e, cx) => this.tileBack(cx)).child("← Back")))
-          .child(div().truncate().font_medium().child(this.tileNav?.id === k && this.tileNav.history.length
-            ? this.tileNav.file.split(/[\\/]/).at(-1) : item.title))
-          .when(this.role() === "preview", (el) => el
-            .when(Boolean(browserViewerType(item)), (row) => row.child(div().flex_none().text_size(11).text_color(t.accent)
-              .cursor_pointer().on_click((_e, cx) => this.openPreviewBrowser(cx)).child("Space · Browser")))
-            .child(div().flex_none().text_size(11).text_color(t.dim).cursor_pointer()
-              .on_click(() => this.closePreviewPane()).child("× Close"))))
-        // Below the list, the row above already shows the note: keep the header short.
-        .when(roomy, (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(where)))
-        .when(Boolean(source), (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(source)))
-        .when(roomy && Boolean(item.note), (el) => el.child(div().text_size(11.5).text_color(t.muted).child(item.note)))
-        .when(Boolean(this.previewOpenError) && this.role() === "preview", (el) => el.child(div().text_size(11).text_color(t.blocked).child(this.previewOpenError))))
-      .when(how === "full" && this.sBar?.id === k, (el) => el.child(this.searchBar(t)))
-      .when(this.pv?.id === k && this.pv.plainCode && !this.sr, (el) => el.child(div().px(14).py(3).text_size(11).text_color(t.dim)
-        .child("Plain text preview: Herdr has no syntax grammar for this file type.")))
-      .when(how === "full" && this.sr?.pv?.how === "text", (el) => el.child(div().px(14).py(3).text_size(11).text_color(t.dim)
-        .child("Search shows plain text so matches can be marked. Esc returns to the code view.")))
-      .child(this.previewBody(item, how, t, cx));
+  // ---- the built-in preview (docs/design.md 4.8) ----
+  // One surface shows an item however it was opened: the Space window (props {role:
+  // "window"}), the docked `v` pane ({role: "viewer"}, following the selection) and the
+  // `rl preview` pane ({role: "preview"}). It draws the most this machine can: Markdown, HTML
+  // and PDF as page tiles, images, a video's poster, a model's still, text and code, else a
+  // thumbnail or the type's icon. Enter opens the file, Space the interactive browser viewer,
+  // q the platform's preview window, o the file manager.
+
+  // The item a surface shows.
+  surfaceItem() {
+    return this.role() === "viewer" ? this.viewerItem() : this.transient ?? null;
   }
 
   // Where this copy's top left is in the window, from a pointer event over it: the filter
@@ -2261,126 +2268,308 @@ export default class ReadingList extends View {
     });
   }
 
-  renderViewer(cx) {
-    const t = theme();
-    const item = this.viewerItem();
-    if (item) this.wantPreview(item, this.width ?? 0, cx);
-    this.followSearch(item);
-    this.vsShown = null;
-    return this.sized(v_flex().id("readlist-viewer").track_focus(this.handle).size_full().min_h(0).bg(t.background).text_size(13))
-      .on_mouse_down("left", () => { if (!this.sTyping) this.handle.focus(); })
-      .on_key_down((e, cx) => {
-        if (!this.viewerKey(e.keystroke, cx)) return;
-        cx.stop_propagation();
-        cx.notify();
-      })
-      .child(item ? this.previewPane(item, "full", t, cx)
-        : div().p(16).text_size(12).text_color(t.dim).child(this.loaded
-          ? "Select an item in the reading list to show it here. v closes this pane."
-          : ""));
-  }
-
-  renderPreviewPane(cx) {
+  // The `rl preview` pane's file: its props, or a later request handed to this pane.
+  takePreviewRequest() {
     const request = shared(PREVIEW_PANE);
     const file = request?.pane === this.previewPaneId ? request.file : props()?.file;
-    if (file !== this.previewFile || request?.request !== this.previewRequest) {
-      this.previewFile = file;
-      this.previewRequest = request?.request;
-      this.previewOpenError = null;
-      this.transient = typeof file === "string" && file ? previewItem(file) : null;
-      this.gen++;
-    }
-    const item = this.transient;
+    if (file === this.previewFile && request?.request === this.previewRequest) return;
+    this.previewFile = file;
+    this.previewRequest = request?.request;
+    this.previewOpenError = null;
+    this.transient = typeof file === "string" && file ? previewItem(file) : null;
+    this.gen++;
+  }
+
+  // The window's title bar drags it: presses on the buttons and the page are stopped.
+  renderSurface(cx) {
+    const role = this.role();
+    if (role === "preview") this.takePreviewRequest();
+    const t = theme();
+    const item = this.surfaceItem();
     if (item) this.wantPreview(item, this.width ?? 0, cx);
     this.followSearch(item);
     this.vsShown = null;
-    const t = theme();
-    return this.sized(v_flex().id("readlist-transient-preview").track_focus(this.handle).size_full().min_h(0).bg(t.background).text_size(13))
+    const k = item ? itemKey(item) : null;
+    const pv = item && this.pv?.id === k ? this.pv : null;
+    if (this.restoreShare != null && item && this.tileResult?.requested === item.path && this.tileResult.height > 0) {
+      this.tileRestore = { file: item.path, offset: this.restoreShare * this.tileResult.height };
+      this.restoreShare = null;
+    }
+    const linked = Boolean(item && this.tileNav?.id === k && this.tileNav.history.length);
+    const where = linked ? this.tileNav.file
+      : props()?.source ?? (!item ? "" : item.machine && item.path ? `${item.machine}:${item.path}` : item.path ?? item.url);
+    // Another machine's file: where the preview comes from.
+    const source = !item?.machine || !item.path ? null
+      : this.fetched.has(k) ? `${fetchedLabel(item.machine, this.fetched.get(k))}; edits to the copy stay on ${words(this.platform).here}`
+      : `on ${item.machine}`;
+    const button = (id, key, label, action, accent = false) => h_flex().id(id).flex_none().gap(5).px(6).py(2).rounded(5)
+      .items_center().cursor_pointer().text_size(11).text_color(accent ? t.accent : t.muted).hover((st) => st.bg(t.hover))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => action(cx))
+      .child(div().px(4).rounded(3).bg(t.chrome).text_size(10).text_color(t.dim).child(key))
+      .child(label);
+    const act = (name) => (cx) => this.surfaceAction(name, cx);
+    const actions = !item ? [] : item.path ? [
+      button("rl-surface-open", "Enter", "Open", act("open")),
+      ...(browserViewerType(item) ? [button("rl-surface-interactive", "Space", "Browser viewer", act("interactive"), true)] : []),
+      button("rl-surface-system", "q", this.platform === "macos" ? "Quick Look" : "Preview window", act("system")),
+      button("rl-surface-reveal", "o", words(this.platform).files, act("reveal")),
+    ] : [button("rl-surface-open", "Enter", "Open", act("open"))];
+    const header = v_flex().flex_none().px(12).pt(7).pb(6).gap(4).border_b(1).border_color(t.border).bg(t.chrome + "66")
+      .child(h_flex().min_w(0).items_center().gap(6)
+        .when(linked, (el) => el.child(button("rl-surface-back", "⌫", "Back", (cx) => this.tileBack(cx))))
+        .child(v_flex().flex_1().min_w(0)
+          .child(div().truncate().font_medium().child(linked ? this.tileNav.file.split(/[\\/]/).at(-1) : item?.title ?? "Preview"))
+          .child(div().truncate().text_size(10.5).text_color(t.dim).child(where)))
+        .when(this.resizable(), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("[ ] width")))
+        .child(button("rl-surface-close", "Esc", role === "viewer" ? "Hide" : "Close", act("close"))))
+      .when(actions.length > 0, (el) => el.child(h_flex().flex_wrap().gap(2).children(actions)))
+      .when(Boolean(source), (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(source)))
+      .when(role === "viewer" && Boolean(item?.note), (el) => el.child(div().text_size(11.5).text_color(t.muted).child(item.note)))
+      .when(Boolean(this.previewOpenError), (el) => el.child(div().text_size(11).text_color(t.blocked).child(this.previewOpenError)));
+    const message = (text) => div().p(16).text_size(12).text_color(t.dim).child(text);
+    return this.sized(v_flex().id(`readlist-${role}`).track_focus(this.handle).size_full().min_h(0).bg(t.background).text_size(13))
       .on_mouse_down("left", () => { if (!this.sTyping) this.handle.focus(); })
       .on_key_down((e, cx) => {
-        if (!this.viewerKey(e.keystroke, cx)) return;
+        if (!this.surfaceKey(e.keystroke, cx)) return;
         cx.stop_propagation();
         cx.notify();
       })
-      .child(item ? this.previewPane(item, "full", t, cx)
-        : div().p(16).text_size(12).text_color(t.dim).child("No local file to preview."));
+      .child(header)
+      .when(Boolean(k) && this.sBar?.id === k, (el) => el.child(this.searchBar(t)))
+      .when(Boolean(pv?.plainCode) && !this.sr, (el) => el.child(div().px(14).py(3).text_size(11).text_color(t.dim)
+        .child("Plain text preview: Herdr has no syntax grammar for this file type.")))
+      .when(this.sr?.pv?.how === "text", (el) => el.child(div().px(14).py(3).text_size(11).text_color(t.dim)
+        .child("Search shows plain text so matches can be marked. Esc returns to the code view.")))
+      .child(!item ? message(role === "viewer" ? (this.loaded ? "Select an item in the reading list to show it here. v closes this pane." : "") : "No local file to preview.")
+        : !pv ? message("Loading preview…") : this.surfaceBody(item, pv, t, cx));
   }
 
-  // The floating preview window: a title bar to drag it by, then the page. Presses on the
-  // page and the buttons are stopped, so only the title bar moves the window.
-  renderWindow(cx) {
-    const t = theme();
-    const item = this.transient;
-    if (item) this.wantPreview(item, this.width ?? 0, cx);
-    this.vsShown = null;
-    const source = props()?.source ?? item?.path ?? "";
-    const button = (id, label, action, accent = false) => div().id(id).flex_none().px(8).py(3).rounded(5).cursor_pointer()
-      .text_size(11.5).text_color(accent ? t.accent : t.dim).hover((s) => s.bg(t.chrome))
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .on_click((_e, cx) => action(cx)).child(label);
-    const pv = item && this.pv?.id === itemKey(item) ? this.pv : null;
-    const tiles = pv && (pv.how === "pdf" || pv.how === "markdown" || pv.how === "html");
-    return this.sized(v_flex().id("readlist-window").track_focus(this.handle).size_full().min_h(0).bg(t.background).text_size(13))
-      .on_key_down((e, cx) => {
-        if (!this.windowKey(e.keystroke, cx)) return;
-        cx.stop_propagation();
-        cx.notify();
-      })
-      .child(h_flex().flex_none().h(38).px(12).gap(8).items_center().border_b(1).border_color(t.border).bg(t.chrome + "66")
-        .when(Boolean(item && this.tileNav?.id === itemKey(item) && this.tileNav.history.length), (el) => el
-          .child(button("rl-window-back", "← Back", (cx) => this.tileBack(cx))))
-        .child(v_flex().flex_1().min_w(0)
-          .child(div().truncate().font_medium().child(item?.title ?? "Preview"))
-          .child(div().truncate().text_size(10.5).text_color(t.dim).child(source)))
-        .when(Boolean(item && browserViewerType(item)), (el) => el
-          .child(button("rl-window-interactive", "Enter · Interactive", (cx) => this.openInteractive(cx), true)))
-        .child(button("rl-window-close", "Esc · Close", () => this.closeWindow())))
-      .when(Boolean(this.previewOpenError), (el) => el.child(div().px(14).py(4).text_size(11).text_color(t.blocked).child(this.previewOpenError)))
-      .child(!item ? div().p(16).text_size(12).text_color(t.dim).child("No local file to preview.")
-        : !pv ? div().p(14).text_size(12).text_color(t.dim).child("Loading preview…")
-          : tiles && !item.machine ? this.tileBody(item, pv, t, cx)
-            : v_flex().flex_1().min_h(0).on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(this.previewBody(item, "window", t, cx)));
+  // The page: tiles for a local Markdown, HTML or PDF file, else the pane renderers.
+  surfaceBody(item, pv, t, cx) {
+    if (this.sr && this.sr.pv === pv) return this.searchBody(pv, t);
+    if (!item.machine && (pv.how === "pdf" || pv.how === "markdown" || pv.how === "html")) return this.tileBody(item, pv, t, cx);
+    return v_flex().flex_1().min_h(0).min_w(0).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .child(this.previewBody(item, "full", t, cx));
   }
 
-  // A key in the preview window: true when handled.
-  windowKey(k, cx) {
-    const action = windowAction(k);
-    if (action === "close") { this.closeWindow(); return true; }
-    if (action === "interactive") { this.openInteractive(cx); return true; }
-    if ((k === "backspace" || k === "alt-left") && this.tileBack(cx)) return true;
-    if (this.pv?.how === "image" && this.imageKey(k, cx)) return true;
-    if (SCROLL_KEYS[k] && this.vsShown) {
-      this.scrollTo(this.vsShown, keyOffset(k, this.vsShown));
+  // The window, or the docked pane, can change its width.
+  resizable() {
+    return this.role() === "window" || (this.role() === "viewer" && this.docked());
+  }
+
+  // The docked pane: the layout's VIEWER_NODE block is shown.
+  docked() {
+    const node = find(layout(), VIEWER_NODE);
+    return Boolean(node) && !node.hidden;
+  }
+
+  // A key in a preview surface: true when handled. While the search prompt has the keyboard,
+  // Esc closes the search and everything else is typing (Enter arrives as its submit).
+  surfaceKey(k, cx) {
+    if (this.sTyping) {
+      if (k !== "escape") return false;
+      this.closeSearch();
       return true;
     }
-    return false;
+    if (k === "/") {
+      this.openSearch();
+      return true;
+    }
+    if ((k === "n" || k === "shift-n") && this.sr) {
+      this.stepSearch(k === "n" ? 1 : -1);
+      return true;
+    }
+    if (k === "escape" && this.sBar) {
+      this.closeSearch();
+      return true;
+    }
+    const image = this.pv?.how === "image";
+    const resize = windowResizeKey(k, image);
+    if (resize && this.resizable()) {
+      this.resizeSurface(resize, cx);
+      return true;
+    }
+    if (image && this.imageKey(k, cx)) return true;
+    const action = windowAction(k);
+    if (action) {
+      this.surfaceAction(action, cx);
+      return true;
+    }
+    if ((k === "backspace" || k === "alt-left") && this.tileBack(cx)) return true;
+    if (SCROLL_KEYS[k] && this.vsShown) {
+      const s = this.vsShown, to = keyOffset(k, s);
+      // Text drawn as rows moves by whole rows, so no line is cut at the top (the end of
+      // the text stays reachable).
+      this.scrollTo(s, s.rows && to < maxOffset(s) ? alignOffset(to, SEARCH_LINE, ROWS_PAD, s) : to);
+      return true;
+    }
+    return this.role() === "viewer" ? this.act(KEYS[k], cx) : false;
+  }
+
+  // Enter, Space, q, o and Esc in a surface (core/browser-viewer.js SURFACE_KEYS).
+  surfaceAction(name, cx) {
+    const item = this.surfaceItem();
+    if (!item) return;
+    if (name === "close") {
+      if (this.role() === "window") this.closeWindow();
+      else if (this.role() === "preview") this.closePreviewPane();
+      else this.closeDock();
+      return;
+    }
+    cx.spawn(async (cx) => {
+      // The docked pane shows a list item and has the list's state: it opens (marking it
+      // read) and reveals as the list does, other machines' files included.
+      if (this.role() === "viewer" && (name === "open" || name === "reveal" || !item.path)) {
+        if (name === "open") await this.open(item, cx);
+        else if (name === "reveal") await this.reveal(item, cx);
+        else notify({ title: "Reading list", body: "A link has no preview; Enter opens it.", level: "info" });
+        cx.notify();
+        return;
+      }
+      const path = this.role() === "viewer" ? await this.localPath(item, name === "system" ? "q" : "Space") : item.path;
+      if (!path) return;
+      if (name === "interactive") await this.openInteractive(item, path, cx);
+      else if (name === "system") await this.surfaceSystem(itemKey(item), path, cx);
+      else if (name === "reveal") {
+        const r = await this.launch("reveal", path, cx);
+        if (!r.ok) notify({ title: "Reading list", body: `Couldn't show ${item.title} in ${words(this.platform).files}: ${r.message}`, level: "error" });
+      } else if (name === "open") await this.openFile(item, path, cx);
+      cx.notify();
+    });
+  }
+
+  // Enter in the window or the `rl preview` pane: opens the file (or, for one that could run,
+  // reveals it, as the list does), then asks the list to mark its item read.
+  async openFile(item, path, cx) {
+    const r = await this.helper("stats", [path]).catch(() => null);
+    const st = parseStats(r?.stdout ?? "", [path]);
+    const act = openAction({ ...item, url: null, path }, st.fs[path], this.platform);
+    if (act.how === "missing") {
+      notify({ title: "Reading list", body: `${item.title} is gone: ${path}`, level: "warning" });
+      return;
+    }
+    const out = await this.launch(act.how, act.target, cx);
+    if (!out.ok) {
+      notify({ title: "Reading list", body: `Couldn't open ${item.title}: ${out.message}`, level: "error" });
+      return;
+    }
+    if (act.how === "reveal") notify({ title: "Reading list", body: `${item.title} could run, so it's shown in ${words(this.platform).files} instead of opened.`, level: "info" });
+    if (props()?.id) await this.markReadHere(props().id, props().mtime ?? st.mt[path] ?? null);
+  }
+
+  // A window has no list of its own: it records the read mark in state.json as the list does
+  // (compare-and-swap, tried again on a stale read), and every list copy, watching that folder,
+  // shows it at once.
+  async markReadHere(id, mtime) {
+    const dir = (await this.helper("dir").catch(() => null))?.stdout?.trim();
+    if (!dir) return;
+    const path = joinPath(dir, "state.json");
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const text = await readTextFile(path).catch(() => null);
+      try {
+        await writeTextFile(path, serializeState(applyAction(parseState(text), id, "read", nowIso(), mtime)), text);
+        return;
+      } catch { /* Another copy wrote first: read again. */ }
+    }
+    notify({ title: "Reading list", body: "Couldn't save the read state; try again.", level: "warning" });
+  }
+
+  // q: the platform's preview window (Quick Look, GNOME Sushi, QuickLook or Peek); q again
+  // on the same item closes it.
+  async surfaceSystem(key, path, cx) {
+    const list = await this.handlers();
+    const open = this.quicklook;
+    if (open) {
+      this.quicklook = null;
+      const r = await this.runAction("preview-close", open.path, { only: open.who, list, extra: () => [open.token, open.id === key ? "same" : "other"] }, cx);
+      if (open.id === key && r.status === "ok") return;
+    }
+    const r = await this.systemPreview(key, path, list, cx);
+    if (r === "pass") notify({ title: "Reading list", body: this.noLook?.reason ? `No preview window here: ${this.noLook.reason}.` : "There is no preview window on this platform here.", level: "info" });
+  }
+
+  // The platform's preview window for `path` through the handlers: "ok" (it shows, and
+  // this.quicklook holds its token), "pass" (nothing here shows one) or "failed" (toasted).
+  async systemPreview(key, path, list, cx) {
+    if (!list.some((h) => !(h.who === "builtin" && this.noLook))) return "pass";
+    const r = await this.runAction("preview", path, { list }, cx);
+    if (r.status === "pass") return "pass";
+    if (r.status !== "ok") {
+      notify({ title: "Reading list", body: `Couldn't preview ${baseName(path)}: ${r.message}`, level: "error" });
+      return "failed";
+    }
+    this.quicklook = { id: key, path, who: r.who, token: token(r.stdout) };
+    return "ok";
+  }
+
+  // Space in a surface: the interactive browser viewer; the window closes once it opens.
+  async openInteractive(item, path, cx) {
+    if (!browserViewerType(item)) {
+      notify({ title: "Reading list", body: `The browser viewer does not show this type. Enter opens it; q ${this.platform === "macos" ? "shows it in Quick Look" : "shows it in the preview window"}.`, level: "info" });
+      return;
+    }
+    if (this.openingInteractive) return;
+    this.openingInteractive = true;
+    try {
+      const result = await this.browserViewer("open", path).catch((e) => ({ code: 1, stderr: String(e?.message ?? e) }));
+      if (result.code === 0) {
+        this.previewOpenError = null;
+        if (this.role() === "window") this.closeWindow();
+        return;
+      }
+      this.previewOpenError = viewerFailureNotice(result)?.replace(/ Preview is shown in the pane\.$/, "") ?? "The browser viewer could not open this file.";
+      cx.notify();
+    } finally { this.openingInteractive = false; }
   }
 
   closeWindow() {
     if (props()?.overlay) closeOverlay(props().overlay);
   }
 
-  // Enter in the window: the interactive browser viewer takes over, and the window closes.
-  openInteractive(cx) {
-    const item = this.transient;
-    if (!item || !browserViewerType(item) || this.openingInteractive) return;
-    this.openingInteractive = true;
-    cx.spawn(async (cx) => {
-      try {
-        const result = await this.browserViewer("open", item.path).catch((e) => ({ code: 1, stderr: String(e?.message ?? e) }));
-        if (result.code === 0) return this.closeWindow();
-        this.previewOpenError = viewerFailureNotice(result)?.replace(/ Preview is shown in the pane\.$/, "") ?? "The browser viewer could not open this file.";
-        cx.notify();
-      } finally { this.openingInteractive = false; }
+  // Esc or Hide in the docked preview: hides its layout block, or closes the pane `v` split
+  // in a layout without one.
+  closeDock() {
+    if (this.docked()) return run("layout.hide", { id: VIEWER_NODE });
+    const pane = viewerPane(shared(VIEWER), panes());
+    if (pane) {
+      run("pane.close", { pane });
+      setShared(VIEWER, { pane: null, at: Date.now() });
+    }
+  }
+
+  // `[` / `]` in the window or the docked pane.
+  resizeSurface(dir, cx) {
+    if (this.role() === "window") return this.resizeWindow(dir, cx);
+    cx.spawn(async () => {
+      const herdr = herdrWidth(await readTextFile(this.herdrWindowPath()).catch(() => null));
+      const px = resizedWidth(this.width, dir, herdr);
+      if (px) run("layout.resize", { id: VIEWER_NODE, px });
     });
   }
 
-  openPreviewBrowser(cx) {
-    if (!this.transient || !browserViewerType(this.transient)) return;
-    cx.spawn(async (cx) => {
-      const result = await this.browserViewer("open", this.transient.path).catch((e) => ({ code: 1, stderr: String(e?.message ?? e) }));
-      this.previewOpenError = result.code === 0 ? null : (String(result.stderr ?? "").trim() || "The browser viewer could not open this file.");
-      cx.notify();
+  // `[` / `]`: the window opens again under its key, in its place, one step narrower or wider,
+  // and the tiles are drawn again at the new width. The width is kept for next time.
+  resizeWindow(dir, cx) {
+    if (this.resizing) return;
+    this.resizing = true;
+    cx.spawn(async () => {
+      try {
+        const herdr = herdrWidth(await readTextFile(this.herdrWindowPath()).catch(() => null));
+        const width = resizedWidth(this.width, dir, herdr);
+        if (!width) return;
+        setShared(WINDOW_WIDTH_KEY, width);
+        const s = this.vsShown;
+        const at = s && s.content > 0 ? s.offset / s.content : 0;
+        const p = props() ?? {};
+        const open = shared(WINDOW);
+        const mine = open?.overlay === p.overlay ? open : { id: p.id ?? null, copy: null };
+        // Marked first, so this copy closing does not read as the window going away.
+        setShared(WINDOW, { ...mine, overlay: "resizing" });
+        const overlay = openOverlay({ mod: NAME, kind: "window", key: WINDOW_KEY, width, height: WINDOW_HEIGHT,
+          props: { role: "window", id: p.id, mtime: p.mtime ?? null, file: p.file, title: p.title, source: p.source ?? null, at } });
+        setShared(WINDOW, { ...mine, overlay });
+      } finally { this.resizing = false; }
     });
   }
 
@@ -2423,39 +2612,6 @@ export default class ReadingList extends View {
   // The text a preview draws, to search; null when it draws none (an image, a folder, ...).
   searchText(pv) {
     return pv && (pv.how === "markdown" || pv.how === "html" || pv.how === "text") && typeof pv.text === "string" ? pv.text : null;
-  }
-
-  // A key in the viewer: true when handled. While the prompt has the keyboard, Esc closes the
-  // search and everything else is typing (Enter arrives as the prompt's submit).
-  viewerKey(k, cx) {
-    if (this.sTyping) {
-      if (k !== "escape") return false;
-      this.closeSearch();
-      return true;
-    }
-    if (k === "/") {
-      this.openSearch();
-      return true;
-    }
-    if ((k === "n" || k === "shift-n") && this.sr) {
-      this.stepSearch(k === "n" ? 1 : -1);
-      return true;
-    }
-    if (k === "escape" && this.sBar) {
-      this.closeSearch();
-      return true;
-    }
-    if (this.role() === "preview" && k === "space" && this.transient && browserViewerType(this.transient)) { this.openPreviewBrowser(cx); return true; }
-    if (this.role() === "preview" && k === "escape") { this.closePreviewPane(); return true; }
-    if ((k === "backspace" || k === "alt-left") && this.tileBack(cx)) return true;
-    if (SCROLL_KEYS[k] && this.vsShown) {
-      const s = this.vsShown, to = keyOffset(k, s);
-      // Text drawn as rows moves by whole rows, so no line is cut at the top (the end of
-      // the text stays reachable).
-      this.scrollTo(s, s.rows && to < maxOffset(s) ? alignOffset(to, SEARCH_LINE, ROWS_PAD, s) : to);
-      return true;
-    }
-    return this.act(KEYS[k], cx);
   }
 
   // `/`: the prompt, empty (Enter on it repeats the search on now), or a note when the
@@ -2683,9 +2839,7 @@ export default class ReadingList extends View {
 
   render(cx) {
     if (props()?.menu) return this.renderMenu(cx);
-    if (this.role() === "preview") return this.renderPreviewPane(cx);
-    if (this.role() === "window") return this.renderWindow(cx);
-    if (this.role() === "viewer") return this.renderViewer(cx);
+    if (this.role() === "preview" || this.role() === "window" || this.role() === "viewer") return this.renderSurface(cx);
     this.takePick(cx);
     this.windowClosed(cx);
     // Another copy turned the person's handler on or off.
@@ -2913,18 +3067,10 @@ export default class ReadingList extends View {
         .on_click((_e, cx) => { this.input.set_value(""); this.f = { ...this.f, text: "" }; this.finding = false; this.handle.focus(); cx.notify(); })
         .child(svg(`${ICONS}/x.svg`).size(12)));
 
-    // The preview: beside the list in a wide pane, below it in a narrow one (after `p`).
-    // The popup is compact: no preview until `p`, and then below the list.
-    const side = wide && !popup;
-    const selRow = items.find((r) => itemKey(r.item) === this.sel);
-    const showPreview = !rail && Boolean(selRow) && previewShown(width, this.choice);
-    const listW = Math.round(Math.max(300, Math.min(460, width * 0.42)));
-    if (showPreview) this.wantPreview(selRow.item, side ? width - listW : width, cx);
-
-    const keyHints = this.folder ? ["↵ open/browse", "← up", "␣ look", "p preview", "/ find", "f filter", this.view === "done" ? "d not done" : "r read", this.view === "done" ? "tab list" : "d done"]
+    const keyHints = this.folder ? ["↵ open/browse", "← up", "␣ preview", "/ find", "f filter", this.view === "done" ? "d not done" : "r read", this.view === "done" ? "tab list" : "d done"]
       : this.view === "done"
-      ? (wide ? ["↵ open", "␣ look", "p preview", "v viewer", "o reveal", "c copy", "/ find", "f filter", "d not done", "tab list"] : ["↵ open", "␣ look", "v view", "/ find", "d not done"])
-      : (wide ? ["↵ open", "␣ look", "p preview", "v viewer", "o reveal", "c copy", "/ find", "f filter", "r read", "d done", "tab done", ...(this.remote.size ? ["R refresh"] : [])] : ["↵ open", "␣ look", "v view", "/ find", "r read", "d done"]);
+      ? (wide ? ["↵ open", "␣ preview", "v dock", "o reveal", "c copy", "/ find", "f filter", "d not done", "tab list"] : ["↵ open", "␣ preview", "v dock", "/ find", "d not done"])
+      : (wide ? ["↵ open", "␣ preview", "v dock", "o reveal", "c copy", "/ find", "f filter", "r read", "d done", "tab done", ...(this.remote.size ? ["R refresh"] : [])] : ["↵ open", "␣ preview", "v dock", "/ find", "r read", "d done"]);
     const hints = h_flex().h(24).px(16).flex_none().items_center().gap(10).text_size(10.5).text_color(t.dim).overflow_hidden()
       .children(keyHints.map((s) => div().flex_none().child(s)))
       // Which actions run: said only when it is the person's own handler.
@@ -2968,11 +3114,7 @@ export default class ReadingList extends View {
       .when(items.length === 0 && !rail, (el) => el.child(v_flex().px(16).gap(6).items_start().text_size(12).text_color(t.dim)
         .child(div().child(empty()))
         .when(filtersEmpty, (el) => el.child(link("rl-clear", "Clear filters", false, () => this.clearFilters())))))
-      .when(showPreview && side, (el) => el.child(h_flex().flex_1().min_h(0)
-        .child(v_flex().w(listW).flex_none().h_full().min_h(0).child(list))
-        .child(this.previewPane(selRow.item, "side", t, cx))))
-      .when(!(showPreview && side), (el) => el.child(list))
-      .when(showPreview && !side, (el) => el.child(this.previewPane(selRow.item, "below", t, cx)))
+      .child(list)
       .when(focused && !rail && rows.length > 0, (el) => el.child(hints));
   }
 }

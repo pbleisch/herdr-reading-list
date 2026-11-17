@@ -2,12 +2,11 @@
 
 A list of files and links that agents and tools put up for the person to read. An agent runs
 `rl add plan.md --note "why"`; the item appears at the top of the list with a toast, showing what
-it is, the note and who added it. The person walks the list with the keyboard, sees a preview of
-the selected item beside the list (rendered markdown, local HTML drawn as image tiles, highlighted
-code, images, a poster of a glTF model, and on macOS Quick Look thumbnails of PDF), looks at it
-closer with Space (a preview window inside Herdr showing the rendered Markdown, HTML, PDF or
-image, with Enter there for the interactive built-in viewer in the browser; the browser viewer
-straight away for video and glTF models; else the platform's preview window), opens it in its default app with Enter, browses
+it is, the note and who added it. The person walks the list with the keyboard, previews an item
+with Space in a window inside Herdr (Markdown, HTML and PDF drawn as page tiles, images, a frame of
+a video, a still of a glTF model, highlighted code, else a Quick Look thumbnail; from there Enter
+opens it, Space opens the interactive viewer in the browser, `q` the platform's preview window),
+or docks that preview beside the sidebar with `v`, opens it in its default app with Enter, browses
 a folder item's contents in the list, and marks it done. Agents on
 other machines Herdr reaches add to that machine's own list, which shows here too: their files
 are previewed in place or fetched into a local copy to open. When the person turns it on, files
@@ -21,15 +20,14 @@ running `rl`. It lives in a pane, in the left sidebar, or as a popup on `cmd-shi
 | Platform | Support |
 |---|---|
 | macOS | Full: `open`, Finder (`open -R`), the Quick Look panel and thumbnails (`qlmanage`). |
-| Linux | Supported: `xdg-open`, the file manager through the freedesktop `FileManager1` D-Bus call (`gdbus`), else `xdg-open` on the folder; the Space preview window needs GNOME Sushi, else the in-pane preview; no thumbnails (other types show their icon). |
-| Windows | Supported, with PowerShell 7 (`pwsh`): the default app (the shell's association), Explorer (`explorer /select,`), the Space preview window in the QuickLook app or PowerToys Peek when installed, else the in-pane preview; images drawn in the pane, other types show their icon. `rl` is `rl.ps1` (with `rl.cmd` and a Git Bash shim); the list lives in `%LOCALAPPDATA%\reading-list`. |
+| Linux | Supported: `xdg-open`, the file manager through the freedesktop `FileManager1` D-Bus call (`gdbus`), else `xdg-open` on the folder; the platform preview window is GNOME Sushi when installed; no thumbnails (other types show their icon). |
+| Windows | Supported, with PowerShell 7 (`pwsh`): the default app (the shell's association), Explorer (`explorer /select,`), the platform preview window is the QuickLook app or PowerToys Peek when installed; images are drawn, other types show their icon. `rl` is `rl.ps1` (with `rl.cmd` and a Git Bash shim); the list lives in `%LOCALAPPDATA%\reading-list`. |
 
-On all three, Space on Markdown, HTML, PDF or a common image opens the preview window inside
-Herdr instead, and Space on video or a glTF model the built-in viewer in the browser (it needs
-Node.js 20 or newer and a browser), unless the person chose "System preview" in the `f` menu;
-without Node or a browser the window shows the text preview and the browser viewer falls back to
-the in-pane preview. On macOS, closing the browser viewer or the Quick Look panel while it is the
-active app makes Herdr active again.
+On all three, Space opens the built-in preview window inside Herdr, unless the person chose
+"System preview" in the `f` menu (then the platform's preview window, or the built-in one where
+there is none). Page tiles and the browser viewer need Node.js 20 or newer and a browser; without
+them the window shows the text. On macOS, closing the browser viewer or the Quick Look panel
+while it is the active app makes Herdr active again.
 
 Each action (open, reveal, the Space preview window, thumbnails) is a handler, a program run with
 the item as a separate argument: one built in per platform, and in front of it, only once the
@@ -65,25 +63,26 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   chip with the machine's name (`muted`), an "offline" chip (`blocked`) while that machine does not
   answer, and "copy from devbox, fetched 18:42" at the end of its second line once a copy was
   fetched. The selected row is `selected` (`raised` when the list has no keyboard); hover is `hover`.
-- **Preview**: in a pane 520 or wider it fills the right of the list (the list takes 42% of the
-  width, 300 to 460), separated by a 1px `border`, on `background`. A header (14 side padding, 1px `border` under it) with the title (medium), the
-  path or URL (11 `dim`; `devbox:/path` for another machine's, with "on devbox" or "copy from devbox,
-  fetched 18:42; edits to the copy stay on this Mac" (Linux: "this computer") under it) and the note (11.5 `muted`), then
-  the body: markdown rendered (`TextView.markdown`), local HTML as image tiles of the page drawn
-  by a headless browser (see "HTML tiles" below), another machine's HTML, or local HTML when tiles
-  cannot be drawn, rendered as text (`TextView.html`, scrollable;
-  the `<body>` without comments, `<head>`, scripts, styles, inline SVG and the like, since it draws
-  no CSS), text and code in a read-only editor with highlighting, images with Fit, zoom buttons and
-  arrow-key pan, a poster of a local glTF model, a Quick Look thumbnail
-  for PDF and anything else Quick Look draws (on Linux, where there are no thumbnails: the type's icon,
-  48 `muted`, centered, over "No thumbnail for this type here. Enter opens it; Space shows it in
-  GNOME Sushi." in 12 `dim`), for a folder "Browse this folder in the reading list with Enter.",
-  a link's URL, "gone" for a missing file. Narrower, the preview is hidden until `p`, then shows below the list (half the pane, at
-  most 260).
-- **Key hints** (24 high, 10.5 `dim`) at the bottom while the list has the keyboard: "↵ open  ␣ look
-  p preview  v viewer  o reveal  c copy  / find  f filter  r read  d done  tab done", and "R
-  refresh" when other machines are connected. While browsing a folder: "↵ open/browse  ← up  ␣ look
-  p preview  / find  f filter  r read  d done".
+- **No preview in the list**: the list is only the list; the built-in preview (below) shows the
+  selected item in a window (Space), docked (`v`) or in an `rl preview` pane. Its body: markdown,
+  local HTML and PDF as page tiles drawn by a headless browser (see "HTML tiles" below), another
+  machine's markdown and HTML as text (`TextView.markdown` / `TextView.html`, the `<body>` without
+  comments, `<head>`, scripts, styles, inline SVG and the like), text and code in a read-only
+  editor with highlighting, images with Fit, zoom buttons and arrow-key pan on their stage, a
+  frame of a local video (FFmpeg) else its thumbnail, a poster of a local glTF model, a Quick Look
+  thumbnail for anything else Quick Look draws (on Linux and Windows, where there are no
+  thumbnails: the type's icon, 48 `muted`, centered, over "No preview for this type here. Enter
+  opens it in its app; q shows it in a preview window if one is installed." in 12 `dim`), "gone"
+  for a missing file. Its header (12 side padding, 1px `border` under it, `chrome` at 40%) has
+  the title (medium), the path or URL (10.5 `dim`; `devbox:/path` for another machine's, with "on
+  devbox" or "copy from devbox, fetched 18:42; edits to the copy stay on this Mac" under it), "[ ]
+  width" when it can resize, **Esc Close** in the window, and a row of buttons, each a key chip
+  and a label: **Enter Open**, **Space Browser viewer** (types the browser viewer shows), **q Quick
+  Look** ("Preview window" on Linux and Windows), **o Finder** (the file manager's name).
+- **Key hints** (24 high, 10.5 `dim`) at the bottom while the list has the keyboard: "↵ open  ␣ preview
+  v dock  o reveal  c copy  / find  f filter  r read  d done  tab done", and "R refresh" when other
+  machines are connected. While browsing a folder: "↵ open/browse  ← up  ␣ preview  / find  f filter
+  r read  d done".
 - **Backgrounds**: `background` in a pane, `chrome` with a top `border` in the sidebar, `popover`
   in the popup. Under 160 wide (a collapsed sidebar) it becomes a rail: a bookmark icon with the
   unread count, and one icon per item.
@@ -100,15 +99,12 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - **Keys** (while the list has the keyboard; a click on it gives it the keyboard): click or
   `j`/`k`/arrows/`g`/`G`/Home/End select (selecting never opens); Enter or a double-click opens in
   the default app and marks read (the popup then closes), and on a folder item browses it in the
-  list (see "Folders"); Space on Markdown, HTML, PDF or a common image opens the preview window
-  (see "Preview window"; Space again on that item closes it), on video or a glTF model the
-  built-in viewer in the browser (see "Built-in viewer"; Space again on that item clears it),
-  and on anything else, or on those too once the person chose "System preview", toggles the macOS
-  Quick Look panel
-  (brought to the front as the active app), on Linux GNOME Sushi (doesn't mark read; without Sushi it shows or hides the in-pane preview as
-  `p` does, or in the rail opens the `v` pane, with a one-time toast saying Sushi is missing); `p`
-  preview in the pane; `v` opens a preview-only pane on the right of the
-  window that follows the selection of any copy (`v` again closes it); `o` reveals in Finder (the
+  list (see "Folders"); Space opens the built-in preview window (see "Preview window"; Space
+  again on that item closes it), or once the person chose "System preview" toggles the macOS
+  Quick Look panel (brought to the front as the active app), on Linux GNOME Sushi (doesn't mark
+  read; without Sushi, the built-in window, with a one-time toast saying Sushi is missing); `v`
+  shows the built-in preview docked right of the sidebar, following the selection of any copy
+  (`v` again hides it); `o` reveals in Finder (the
   file manager on Linux); `c`
   copies the path or URL (with a toast); `r` read/unread; `d` done (Tab switches to the Done view,
   where `d` or `u` brings it back); Shift-D deletes the item file (no undo); `/` opens a filter box
@@ -160,20 +156,38 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   setting, and toasts the new choice. Absent or unreadable is `builtin`. Every Space press reads
   the file again, so the choice (or an edit by hand) applies at once and to every copy. It only
   switches the types the built-in viewer covers; the person's own handler is still asked first.
-- **Preview window** (`docs/design.md` 4.8): Space on Markdown, HTML, PDF or a common image opens
-  the mod itself as an overlay window (`openOverlay({kind: "window", key: "readlist-preview",
-  width: 820, height: 0.85, props: {role: "window", file, title, source}})`; a remote item's
+- **Preview window** (`docs/design.md` 4.8): Space on a file opens the mod itself as an overlay
+  window (`openOverlay({kind: "window", key: "readlist-preview", width, height: 0.85, props:
+  {role: "window", id, mtime, file, title, source}})`, `width` 70% of
+  Herdr's width from `appHome()/window.json` within 640-1280 px, or the width last chosen with
+  `[` / `]`, kept in `shared("readlist.window-width")`; a remote item's
   fetched copy as `file`). It draws Markdown, HTML and PDF as tiles with `viewer/render.mjs`
   (below; a PDF through the host's trusted `pages` view, its first 100 pages, canvases drawn
-  only around the tile being captured) and images with the pane's image controls. It focuses
-  itself: Esc and Space close it, Enter (and an "Enter · Interactive" button) runs the built-in
-  viewer on the file and closes the window, the wheel and the viewer pane's scroll keys scroll
-  it, Backspace returns from a followed local link. Only its title bar drags it.
+  only around the tile being captured), a local video's frame with `viewer/video-poster.mjs`
+  (FFmpeg, PNG cached by real path, size and mtime under `appHome()/readlist-poster-cache`) and
+  the rest as described under "No preview in the list". It focuses itself: Enter opens the file
+  as the list's Enter does (revealing what could run) and writes the read mark into
+  `state.json` itself (compare-and-swap; the lists see it through their folder watch), Space runs
+  the built-in viewer on the file and closes the window, `q` the platform's preview window
+  through the handlers (`q` again closes it), `o` reveals, Esc closes, the wheel and the viewer
+  pane's scroll keys scroll it, `/` searches its text, Backspace returns from a followed local
+  link, `]` / `[` (and `=` / `-` unless it shows an image) open it again 15% wider or narrower
+  in its place, scrolled to the same share. Only its title bar drags it. The docked preview (a
+  hidden layout block `readlist-viewer` the install adds right after the sidebar, props `{role:
+  "viewer"}`, shown and hidden by `layout.toggle` (`v`), hidden by Esc and its header's **Esc Hide**
+  button (`layout.hide`), resized by `layout.resize`; `v` reads the
+  shown layout's file to find it, since `layout()` leaves hidden nodes out, and splits a pane on
+  the right without it) and the `rl preview` pane have the same body and keys, the docked one
+  opening and revealing through the list's own `open` and `reveal`. Images sit on a checkerboard (shipped 512 px tiles
+  drawn at 256 px, dark or light by the theme) or plain dark or light gray, cycled by `b` and
+  kept in `shared("readlist.image-bg")`, inside a thin border at the image's own rectangle: its
+  pixel size comes from the first 64 KiB of the cached copy (a `head64` helper prints them as
+  base64; `core/image.js` reads PNG, GIF, JPEG, WebP and BMP headers).
   `shared("readlist.window")` (`{overlay, id, copy}`) lets the list toggle it (Space again on
   its item), show another item in it, or close it before another kind of preview; when it
   closes it records whether it had the keyboard, and the list that opened it takes it back.
-- **Built-in viewer** (`viewer/`, see `docs/viewer-contract.md`): Space on video or glTF, and
-  Enter in the preview window, run
+- **Built-in viewer** (`viewer/`, see `docs/viewer-contract.md`): Space in the built-in preview
+  runs
   `node viewer/host.mjs open <appHome()/readlist/viewer> <absolute file>`. That starts (or
   reuses) a detached `host.mjs serve` process: an HTTP server on `127.0.0.1` only, a random port,
   a random 256-bit token as the first path part, port, token, pid and build hash in a user-only
@@ -190,7 +204,7 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   PDF.js (pages, zoom, search, copy; no PDF scripts); video with the browser's controls and byte
   ranges; images with fit, actual size, zoom, pan and rotate; `.glb`/`.gltf` with the bundled
   Three.js (orbit, pan, zoom, reset). Nothing comes from a CDN. When `node` or the browser fails,
-  a toast says why and the in-pane preview shows instead. Another machine's item uses its fetched
+  the built-in preview says why under its header. Another machine's item uses its fetched
   copy.
 - **HTML tiles**: for a local HTML item the preview (and for Markdown, HTML and PDF the preview
   window) runs `node viewer/render.mjs` with the file,
@@ -242,8 +256,8 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   which runs the handler as `ACTION [ARG...] -- ITEM` (ITEM an absolute path with its folders
   resolved, or an http(s) link for `open-url`; nothing else from the item): `open`, `reveal`,
   `open-url`, `preview` (prints a token), `preview-close TOKEN same|other`, `thumbnail SIZE OUT`.
-  Exit 0 done, 10 not handled (the next handler, then the mod's fallback: the browser, the in-pane
-  preview, the type's icon), else an error whose first stderr line is toasted. 15 s per action,
+  Exit 0 done, 10 not handled (the next handler, then the mod's fallback: the browser, the
+  built-in preview window, the type's icon), else an error whose first stderr line is toasted. 15 s per action,
   30 s per thumbnail, one try each; a thumbnail that failed or that no handler made is not asked
   for again until the file or the handlers change. The built-in ones are `handlers/macos.sh`
   (`open`, `open -R`, `qlmanage -p` with its pid as the token, brought to the front by `osascript`,
@@ -465,9 +479,9 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
   `http://127.0.0.1:<port>/<token>/shell` showing it, and Space on another such item reuses that
   window; with `"readlist": {"space_preview": "system"}` (the `f` menu's "System preview") Space
   opens the platform's preview window instead, without restarting anything. With no `node` on
-  PATH, Space says so and shows the in-pane preview.
-- A local HTML item with a stylesheet shows beside the list as the styled page (tiles), not as
-  bare text, when Chrome, Chromium or Edge is installed.
+  PATH, the built-in preview shows the text and Space there says the viewer could not open.
+- A local HTML item with a stylesheet shows in the built-in preview as the styled page (tiles), not
+  as bare text, when Chrome, Chromium or Edge is installed.
 - Enter on a folder item lists its entries in place; Right enters a subfolder, Left goes back, and
   a symlink inside it is not listed.
 - `rl preview -- <file>` opens a preview pane on the right without adding an item; a second call
@@ -485,7 +499,7 @@ All colors are `theme()` names, so it follows the person's theme; sizes are logi
 - On Windows: `rl add`, `rl ls`, `rl done`, `rl rm` work from PowerShell, cmd.exe and Git Bash,
   and an item file made on macOS lists and is marked done unchanged but for `done_at`; Enter opens
   a PDF in its default app, `o` selects it in Explorer, Enter on a `.exe`, `.ps1` or `.lnk` selects
-  it in Explorer instead; Space opens QuickLook or Peek when installed, else the in-pane preview.
+  it in Explorer instead; with "System preview", Space opens QuickLook or Peek when installed, else the built-in preview.
 - With "Files Claude Code sends" off, a Claude Code agent's SendUserFile adds nothing. Turned on, a
   file the agent sends next appears as a `result` item with the caption as its note, naming that
   agent; sending a file that is already on the list leaves its item as it is.

@@ -9,23 +9,48 @@ default app when you press Enter.
 
 ## Platforms
 
-| | Open (Enter) | Show in the file manager (`o`) | Space: preview window | Thumbnails in the pane | Popup key |
+| | Open (Enter) | Show in the file manager (`o`) | Platform preview window (`q`, or Space when chosen) | Thumbnails in the preview | Popup key |
 |---|---|---|---|---|---|
-| macOS | `open` | Finder (`open -R`) | By default a preview window inside Herdr for Markdown, HTML, PDF and common images, and the browser viewer for video and glTF; Quick Look for other files | Quick Look (PDF, ...) | `cmd-shift-i` |
-| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | By default a preview window inside Herdr for Markdown, HTML, PDF and common images, and the browser viewer for video and glTF; GNOME Sushi for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
-| Windows | the default app | Explorer (`explorer /select,`) | By default a preview window inside Herdr for Markdown, HTML, PDF and common images, and the browser viewer for video and glTF; QuickLook or PowerToys Peek for other files, if installed; else the preview in the pane | images only; other types show their icon | `ctrl-shift-i` |
+| macOS | `open` | Finder (`open -R`) | Quick Look | Quick Look (PDF without a browser, video without FFmpeg, Office, ...) | `cmd-shift-i` |
+| Linux | `xdg-open` | the file manager over D-Bus (`gdbus`), else `xdg-open` on its folder | GNOME Sushi, if installed | images only; other types show their icon | `ctrl-shift-i` |
+| Windows | the default app | Explorer (`explorer /select,`) | QuickLook or PowerToys Peek, if installed | images only; other types show their icon | `ctrl-shift-i` |
 
-**The preview window.** Space on a Markdown, HTML, PDF or image item opens a floating window
-inside Herdr that shows the rendered page: Markdown and HTML with their styles and local images,
-PDF pages one under another (the first 100), images with fit, zoom and pan. It takes the keyboard
-when it opens: the wheel, `j` / `k`, the arrows, Page Down / Page Up, Ctrl-D / Ctrl-U and
-`g` / Shift-G scroll it, Esc or Space closes it, and Enter (or **Enter · Interactive**) opens the
-live page in the browser viewer instead, where links, text selection, search and copy work; the
-window is a picture of the page, so those do not. Space again on the same item in the list closes
-it, Space on another item shows that one in the same window, and the list has the keyboard again
-when it closes. Drag the window by its title bar; it opens where you last left it. Pages draw with
-a headless Chrome, Chromium or Edge and Node.js; without them the window shows the text preview,
-and Enter still opens the browser viewer when it can.
+**The built-in preview.** Space on a file opens a floating window inside Herdr with the best
+picture of it this computer can make:
+
+- Markdown and HTML as the rendered page, with their styles and local images, and PDF pages one
+  under another (the first 100), drawn by a headless Chrome, Chromium or Edge and Node.js;
+- images with fit, zoom and pan, on a checkerboard so transparent parts show and framed by a thin
+  border (`b` or **Background** switches to plain dark or light gray, and the choice is kept);
+- a frame of a video (with FFmpeg installed, else a Quick Look thumbnail on macOS), and a still
+  render of a glTF model;
+- text and code highlighted; anything else as a Quick Look thumbnail on macOS, or its icon with a
+  note that Enter opens it.
+
+The window is a picture of the file: links, text selection, video and 3D are not interactive in
+it. Its keys, also shown as buttons in its title bar:
+
+| Key | Does |
+|---|---|
+| Enter | open the file in its default app (and mark the item read), as Enter in the list does |
+| Space | the interactive browser viewer: live links, selection, search, copy, video playback, 3D |
+| `q` | the platform's preview window: Quick Look, GNOME Sushi, QuickLook or Peek (`q` again closes it) |
+| `o` | show it in Finder (the file manager on Linux, Explorer on Windows) |
+| Esc | close the window (the list has the keyboard again), or hide the docked preview |
+| `]` / `[` | wider / narrower (also `=` and `-`, except on an image, where they zoom); the width is kept |
+| wheel, `j` / `k`, arrows, Page Down / Page Up, Ctrl-D / Ctrl-U, `g` / Shift-G | scroll |
+| `/`, `n` / Shift-N | search the text of Markdown, HTML, text and code |
+| Backspace / Alt-Left | return from a local link followed in the page |
+
+Space again on the same item in the list closes the window, and Space on another item shows that
+one in the same window. It opens at 70% of Herdr's width, kept between 640 and 1280 px so lines
+stay readable, then at the width you last chose; the page is drawn again at the new width. Drag it
+by its title bar; it opens where you last left it.
+
+**Docked.** `v` in the list shows the same preview docked full height just right of the sidebar,
+following the selection (the list keeps the keyboard; click the preview to use its keys, where
+`[` / `]` resize it). `v` in the list, Esc in the preview or its **Hide** button hides it. The install adds this dock to the reading-list layout as a
+hidden block; in a layout without it, `v` opens the preview as a pane on the right of the tab.
 
 **Back to Herdr (macOS).** Closing the browser viewer window, or the Quick Look panel, makes Herdr
 the active app again instead of leaving you in another Chrome window or app. That happens only when
@@ -33,34 +58,27 @@ the viewer or the panel was still the active app when it closed, so switching to
 is left alone. Opening the browser viewer again while one is already open brings up a new window
 in front and closes the old one, so one viewer window stays.
 
-To use your platform's preview window for those supported types too, press `f` in the list and
-choose **Space preview → System preview**. Choose **Built-in viewer** to switch back. The choice
-is stored as `"readlist": {"space_preview": "system"}` in Herdr's live `settings.json`
-(default: `"builtin"`), shared by every Reading list copy. The next Space press uses the new
-choice. Your opted-in handler still gets first chance; unsupported types and the in-pane fallback
-keep their existing behavior. With **System preview**, those types skip the Herdr window too.
-This setting changes Space in the reading list;
-`rl preview --browser` explicitly opens the browser viewer.
+To have Space open your platform's preview window instead, press `f` in the list and choose
+**Space preview → System preview**. Choose **Built-in viewer** to switch back. The choice is stored
+as `"readlist": {"space_preview": "system"}` in Herdr's live `settings.json` (default:
+`"builtin"`), shared by every Reading list copy, and the next Space press uses it. Your opted-in
+handler still gets first chance. Where the platform has no preview window (Linux without GNOME
+Sushi, Windows without QuickLook or Peek), Space opens the built-in one and says why once.
+`rl preview --browser` opens the browser viewer directly.
 
 The browser viewer needs Node.js 20 or newer and a browser on each platform. It
 bundles its frontend, Marked, PDF.js and Three.js locally and keeps untrusted Markdown, HTML and PDF scripting disabled. Markdown headings, lists, tables, task lists, links, images and code blocks render in a sandboxed document; raw HTML is shown as text. Local links and images are limited to referenced files under the Markdown file's folder, and remote resources are not loaded. PDFs have
 page navigation, zoom, text search and copy; videos use native playback and seeking, with an Open in
 default app option for unsupported codecs. FFmpeg adds a poster frame when it is already installed.
-Local HTML also renders as image tiles in the reading list's preview pane when Chrome, Chromium or
-Edge and a Node.js runtime with WebSocket support are available. Tiles appear as they finish; the
-pane reflows the page when its width or the theme changes. Its wheel and keys scroll the page.
-Click a local HTML link to show that page in the same pane; **Back** or Backspace returns to the
-previous page. Image tiles cannot be selected or searched; Enter in the preview window opens the
-browser viewer for selection and search. If tile rendering fails, the pane explains why and shows
-the HTML text preview.
-See the [viewer contract](docs/viewer-contract.md). Without Node or a browser, Space shows the native
-preview in the pane. Linux is supported: opening needs `xdg-open` (xdg-utils), showing in the file
-manager works with any file manager that answers the freedesktop `FileManager1` call (Nautilus,
-Dolphin, Nemo, Caja, Thunar...), and the Space preview window needs GNOME Sushi (the `sushi`
-package). Without Sushi, Space shows or hides the preview in the pane instead and says so once;
-when a program is missing, the list says which one instead of failing quietly. Markdown, text, code,
-images preview in the pane on all three. Folder contents are browsed in the list. Items on other machines are listed from macOS,
-Linux and Windows alike.
+The built-in preview's pages appear as they finish and are drawn again when its width or the theme
+changes. Click a local HTML link to show that page in the same preview; **Back** or Backspace
+returns to the previous page. If page rendering fails, the preview says why and shows the text.
+See the [viewer contract](docs/viewer-contract.md). Linux is supported: opening needs `xdg-open`
+(xdg-utils), showing in the file manager works with any file manager that answers the freedesktop
+`FileManager1` call (Nautilus, Dolphin, Nemo, Caja, Thunar...), and the platform preview window is
+GNOME Sushi (the `sushi` package); when a program is missing, the list says which one instead of
+failing quietly. Folder contents are browsed in the list. Items on other machines are listed from
+macOS, Linux and Windows alike.
 
 Windows is supported with PowerShell 7 (`pwsh`, which Herdr also uses as the default shell there;
 [install it](https://aka.ms/powershell) if `pwsh` is missing): the mod runs its PowerShell scripts
@@ -141,8 +159,8 @@ Agents without `rl` can still add items by writing a small JSON file; see
 
 `rl preview [--pane|--browser] -- PATH` opens a file without adding it to the list.
 `--pane` is the default. It opens a Reading list preview pane in the running Herdr
-window; a later call updates the same pane. The pane shows the file name, its native
-preview, **Space · Browser** for types supported by the browser viewer, and **Close**.
+window; a later call updates the same pane. The pane is the built-in preview, with its keys and
+buttons (Enter, Space for the browser viewer, `q`, `o`) and **Close**.
 `--browser` uses the same local browser viewer host and session as Space on a list
 item. It works without an open Herdr window when the mod's viewer is installed and
 Node.js and a browser are available.
@@ -153,7 +171,7 @@ URLs and remote machine requests are refused. It makes
 no list item, read-state change, toast or remote copy. Exit status is 0 when the
 handoff succeeds, 1 for an unavailable file, viewer or Herdr window (or a refused
 URL or remote path), and 2 for command syntax. A successful pane handoff means Herdr
-accepted the split; rendering can still report a file or renderer error in the pane.
+accepted the split; rendering can still report a file or renderer error in the preview.
 
 Other mods should pass arguments separately, with the path after `--`:
 
@@ -230,9 +248,8 @@ In the list:
 | click, `j` / `k`, arrows, `g` / `G` | select (selecting never opens anything) |
 | Enter, double-click | open in its app; marks it read. On a folder: browse its contents in the list |
 | Right / Left, Backspace, `.` | while browsing a folder: enter the selected subfolder / go up / show or hide hidden entries |
-| Space | the preview window inside Herdr for Markdown, HTML, PDF and common still images, the browser viewer for video and glTF models (or the system preview for all of them, as chosen in `f`); Quick Look, GNOME Sushi, QuickLook or PowerToys Peek for other files where available (again closes the preview) |
-| `p` | show or hide the preview in the pane |
-| `v` | a preview pane on the right of the window that follows the selection |
+| Space | the built-in preview window (or the platform's preview window, as chosen in `f`); again closes it |
+| `v` | the built-in preview docked right of the sidebar, following the selection; again hides it |
 | `o` | show in Finder (the file manager on Linux, Explorer on Windows) |
 | `c` | copy the path or URL |
 | `r` | read / unread |
@@ -242,21 +259,9 @@ In the list:
 | `f` | filter menu: space, agent, type, unread only; also the "Files Claude Code sends" switch, Actions (built-in or your handler) and Space preview (built-in viewer or system preview) |
 | Shift-R | list this machine and every other one again now |
 
-In the `v` pane (click it to give it the keyboard), you can scroll and search the item it shows,
-like `less`. The scroll keys move markdown, HTML and search results; text and code show in a
-highlighted editor that scrolls with the wheel or the trackpad:
-
-| Key | Does |
-|---|---|
-| `j` / `k`, Down / Up | scroll a line |
-| Space / Shift-Space, Page Down / Page Up | scroll a page |
-| Ctrl-D / Ctrl-U | scroll half a page |
-| `g` / Shift-G, Home / End | go to the top / the bottom |
-| `/` | a search prompt; Enter goes to the first match after the current one and marks them all, with "3 of 12" in the bar (Enter on an empty prompt repeats the search) |
-| `n` / Shift-N | next / previous match, wrapping at the ends ("wrapped" in the bar) |
-| Esc | close the search |
-| `v` | close the pane |
-| Backspace / Alt-Left | return from a local HTML link opened in the pane |
+The docked preview (`v`) and the `rl preview` pane have the window's keys (above); click them to
+give them the keyboard. Text and code show in a highlighted editor that scrolls with the wheel or
+the trackpad.
 
 The browser viewer fits still images by default. Use **Actual size**, the zoom buttons, the wheel
 or a pinch to zoom; drag to pan; **Rotate** or `R` to turn the image. `F` fits it again, `1`
@@ -264,10 +269,10 @@ shows actual size, and the arrow keys pan. SVG is shown as an inert image. HEIC 
 when the browser can decode them. For `.glb` and `.gltf`, drag to orbit, right drag to pan, use the
 wheel or a pinch to zoom, and choose **Reset view** to return to the opening angle. A `.gltf`
 can use buffers and textures in its own folder; unsupported glTF extensions and unavailable WebGL
-show an error in the viewer. The pane shows a rendered model poster when headless Chrome,
-Chromium or Edge can make one. Its browser viewer is interactive.
+show an error in the viewer. The built-in preview shows a rendered still of the model when
+headless Chrome, Chromium or Edge can make one; Space there opens it interactively.
 
-The wheel and the trackpad scroll it too. The search is literal text, case-insensitive unless the
+The search is literal text, case-insensitive unless the
 query has a capital letter. It covers markdown, HTML, text and code; while it is on, the item shows
 as plain text (markdown as its source, HTML as its text), and it ends when the selection moves to
 another item; Esc ends it, and text and code go back to the highlighted editor at the top. Images,
@@ -276,13 +281,7 @@ thumbnails and folders have nothing to search, and `/` says so.
 Each key in the list is also a command (`herdr-app do readlist.open`, `readlist.down`, ...) you can
 bind in `keys.json`. Global: `cmd-shift-i` (`ctrl-shift-i` on Linux and Windows) opens the popup.
 
-In a pane 520 px or wider, the selected file's preview shows beside the list: markdown, local HTML
-as rendered tiles, text and code highlighted, images with Fit, zoom and keyboard pan controls,
-and on macOS a Quick Look thumbnail of PDF and anything else Quick Look can draw
-(on Linux those show their type's icon). Narrower, `p`
-shows it below the list. Click the HTML preview to give its keyboard scroll keys focus; list keys
-still navigate the list when it has focus. HTML on another machine and local HTML when tile rendering
-is unavailable show readable text and structure without CSS or scripts. Enter on a folder item browses its contents in the reading-list pane. Enter or Right enters a subfolder, Backspace or Left goes up, and the Up row returns to the parent. **Show hidden** or `.` includes hidden entries. The existing space, agent, type, unread and text filters apply to the entries; `r` and `d` mark an entry read or done, and Tab switches between open and done entries. Select a file to preview it in the pane; Space opens its rich viewer when supported, and Enter opens it or reveals it if it could run. A selected folder shows only a brief preview message. Browsing never goes above the item's root or follows symlinks. Each folder lists at most 200 entries and browsing stops at 12 levels. Remote entries are listed on their machine; only the selected file is copied when its preview needs a local copy.
+Enter on a folder item browses its contents in the reading-list pane. Enter or Right enters a subfolder, Backspace or Left goes up, and the Up row returns to the parent. **Show hidden** or `.` includes hidden entries. The existing space, agent, type, unread and text filters apply to the entries; `r` and `d` mark an entry read or done, and Tab switches between open and done entries. Space previews a file, and Enter opens it or reveals it if it could run. Browsing never goes above the item's root or follows symlinks. Each folder lists at most 200 entries and browsing stops at 12 levels. Remote entries are listed on their machine; only the selected file is copied when its preview needs a local copy.
 
 A read item whose file changed
 since shows a "changed" chip. Executable
@@ -290,12 +289,11 @@ items (apps, scripts, and on Linux `.desktop` files, AppImages and packages; on 
 `.bat`, `.cmd`, `.ps1`, `.msi`, `.lnk`, `.vbs`, `.js`, `.hta`, disk images and the like, and any
 type in `PATHEXT`) are shown in the file manager, never opened.
 
-The in-pane code preview uses Herdr's installed syntax set. Its source is read up to 512 KiB.
-Extensionless files with a recognized `#!` line also get a code preview. For code files, Space opens
-the platform's preview window, which may display them differently. The `v` pane highlights them
-the same way; an active search shows plain text.
+The built-in preview's code view uses Herdr's installed syntax set. Its source is read up to
+512 KiB. Extensionless files with a recognized `#!` line also get a code preview; `q` shows the
+platform's preview window, which may display them differently. An active search shows plain text.
 
-| Files | In-pane syntax | Reason for fallback |
+| Files | Syntax | Reason for fallback |
 |---|---|---|
 | `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx` | JavaScript | TypeScript and JSX grammars are unavailable. |
 | `.json`, `.jsonc`; `.yaml`, `.yml`, `.toml` | JSON; YAML | JSON with comments and TOML grammars are unavailable. |
@@ -322,7 +320,7 @@ again. A Windows machine has no list here yet (the list's scripts there need `sh
 
 ### Your own handler
 
-Enter, Space, `o` and the pane's thumbnails each run a handler. You can write your own, a program
+Enter, Space, `q`, `o` and the preview's thumbnails each run a handler. You can write your own, a program
 the list asks first, so a file opens the way you want on this computer; whatever it leaves alone
 falls through to the built-in handler. It is off until you turn it on.
 
@@ -344,12 +342,12 @@ last argument, right after `--`:
 | `open -- PATH` | Enter | open the file or folder |
 | `reveal -- PATH` | `o`, and Enter on a file that could run | show it in the file manager |
 | `open-url -- URL` | Enter on a link (http and https only) | open the link |
-| `preview -- PATH` | Space | show a preview window; may print one word (a token, such as a pid) on stdout |
-| `preview-close TOKEN same\|other -- PATH` | Space while its preview is open | `same`: Space again on that item, close it (exit 0 when it did; otherwise the list shows it again). `other`: Space on another item; close it, or keep the window for the next preview |
-| `thumbnail SIZE OUT -- PATH` | the pane shows a file it cannot draw | write a PNG about SIZE pixels wide to OUT (its folder is yours for scratch files) |
+| `preview -- PATH` | Space (asked first, whichever preview is chosen), and `q` in the built-in preview | show a preview window; may print one word (a token, such as a pid) on stdout. Exit 10 to leave Space to the built-in preview |
+| `preview-close TOKEN same\|other -- PATH` | Space or `q` while its preview is open | `same`: again on that item, close it (exit 0 when it did; otherwise it shows again). `other`: on another item; close it, or keep the window for the next preview |
+| `thumbnail SIZE OUT -- PATH` | the built-in preview shows a file it cannot draw | write a PNG about SIZE pixels wide to OUT (its folder is yours for scratch files) |
 
 Exit 0 when done, 10 for "not handled" (the built-in handler runs, then the list's own fallback:
-the browser for a link, the preview in the pane for Space, the type's icon for a thumbnail), and
+the browser for a link, the built-in preview window for Space, the type's icon for a thumbnail), and
 anything else for an error: the first line of stderr shows in a toast. The list waits 15 s for an
 action and 30 s for a thumbnail, then stops it, so start long-running programs in the background.
 PATH is an absolute path with its folders resolved (`C:\...` on Windows); for another machine's

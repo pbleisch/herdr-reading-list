@@ -13,27 +13,68 @@ export function browserViewerType(item) {
   return type === "image" && BROWSER_IMAGES.has(extension) ? "image" : null;
 }
 
-// Where Space shows an item: "system" (the platform's preview window), "window" (the
-// preview window inside Herdr: Markdown, HTML and PDF as rendered tiles, images drawn) or
-// "browser" (the interactive browser viewer, for video and glTF, which tiles cannot show).
-// Only types the built-in viewer covers switch with the person's preference.
+// Where Space shows an item: "window", the built-in preview inside Herdr (any file: pages as
+// rendered tiles, images, video posters, 3D stills, text, thumbnails), or "system", the
+// platform's preview window, as the person chose in the `f` menu. A link has no file to show.
 export function spacePreviewRoute(item, mode) {
-  const type = browserViewerType(item);
-  if (mode === "system" || !type) return "system";
-  return type === "video" || type === "gltf" ? "browser" : "window";
+  return mode === "system" || !item?.path ? "system" : "window";
 }
 
 // The Herdr preview window: an overlay window of this mod (props {role: "window"}),
 // opened under one key so it reopens where the person last dropped it.
 export const WINDOW_KEY = "readlist-preview";
-export const WINDOW_SIZE = { width: 820, height: 0.85 };
+export const WINDOW_HEIGHT = 0.85;
+// Its width in px: by default 70% of the Herdr window, kept between 640 and 1280 px so a very
+// wide window does not make lines too long to read. `[` / `]` change it by 15%, between 480 px
+// and the Herdr window's width, and the choice is kept (shared("readlist.window-width")).
+export const WINDOW_WIDTH = { share: 0.7, min: 640, max: 1280, least: 480, step: 1.15 };
 
-// What a key does in the preview window: Esc and Space close it (Space toggles it, as in the
-// list), Enter opens the interactive browser viewer. Scrolling keys are handled apart.
+// The Herdr window's width in logical px from its window.json ({bounds: [x, y, w, h]}), or null.
+export function herdrWidth(text) {
+  try {
+    const width = JSON.parse(text ?? "null")?.bounds?.[2];
+    return Number.isFinite(width) && width > 0 ? width : null;
+  } catch {
+    return null;
+  }
+}
+
+// The width to open the window at: the kept one, else the default; a share of the window
+// when its size is unknown.
+export function windowWidth(saved, herdr) {
+  const most = herdr ? Math.round(herdr * 0.98) : Infinity;
+  if (Number.isFinite(saved) && saved > 0) return Math.round(Math.max(WINDOW_WIDTH.least, Math.min(most, saved)));
+  if (!herdr) return WINDOW_WIDTH.share;
+  return Math.round(Math.min(most, Math.max(WINDOW_WIDTH.min, Math.min(WINDOW_WIDTH.max, herdr * WINDOW_WIDTH.share))));
+}
+
+// One step wider (dir 1) or narrower (-1) from the window's measured width, or null when it
+// cannot change.
+export function resizedWidth(current, dir, herdr) {
+  if (!(current > 0)) return null;
+  const most = herdr ? Math.round(herdr * 0.98) : Infinity;
+  const next = Math.round(Math.max(WINDOW_WIDTH.least, Math.min(most, dir > 0 ? current * WINDOW_WIDTH.step : current / WINDOW_WIDTH.step)));
+  return Math.abs(next - current) < 2 ? null : next;
+}
+
+// A key that resizes the window: `]` / `[` always, `=` / `+` / `-` too unless an image shows
+// (there they zoom it). 1 wider, -1 narrower, null otherwise.
+export function windowResizeKey(keystroke, image = false) {
+  if (keystroke === "]") return 1;
+  if (keystroke === "[") return -1;
+  if (image) return null;
+  if (keystroke === "=" || keystroke === "+" || keystroke === "shift-=") return 1;
+  return keystroke === "-" ? -1 : null;
+}
+
+// What a key does in the built-in preview (the window, the docked `v` pane and the `rl preview`
+// pane): Enter opens the file in its default app, Space in the interactive browser viewer, q in
+// the platform's preview window, o shows it in the file manager, Esc closes the window or pane,
+// or hides the docked preview.
+// Scrolling, search, width and image keys are handled apart.
+export const SURFACE_KEYS = { enter: "open", space: "interactive", q: "system", o: "reveal", escape: "close" };
 export function windowAction(keystroke) {
-  if (keystroke === "escape" || keystroke === "space") return "close";
-  if (keystroke === "enter") return "interactive";
-  return null;
+  return SURFACE_KEYS[keystroke] ?? null;
 }
 
 // Space in the list while a preview window is open (shared("readlist.window") is

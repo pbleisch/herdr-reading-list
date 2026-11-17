@@ -23,7 +23,7 @@
 //   thumbnail SIZE OUT -- PATH            write a PNG about SIZE px wide to OUT, in a folder
 //                                         of its own the handler may also use for scratch
 // Exit 0: done. Exit NOT_HANDLED (10): the next handler tries (the person's, then the
-// built-in, then the mod's own fallback: the in-pane preview for Space, the type's icon for
+// built-in, then the mod's own fallback: the built-in preview window for Space, the type's icon for
 // a thumbnail, the browser for a link). Anything else: failed; the first line of stderr is
 // shown in a toast. Each run has a time limit (TIMEOUT_MS, THUMB_SECONDS).
 

@@ -436,6 +436,27 @@ switch -CaseSensitive ($op) {
 			$s.Dispose()
 		}
 	}
+	# HEAD64_SCRIPT: the first $a[1] bytes of the file $a[0] as one line of base64.
+	'head64' {
+		if ($a.Count -ne 2 -or -not (Test-LocalPath $a[0])) { exit 2 }
+		try {
+			$s = [IO.File]::OpenRead($a[0])
+		} catch {
+			Fail "cannot read $($a[0])"
+		}
+		try {
+			$buf = [byte[]]::new([int]$a[1])
+			$n = 0
+			while ($n -lt $buf.Length) {
+				$k = $s.Read($buf, $n, $buf.Length - $n)
+				if ($k -le 0) { break }
+				$n += $k
+			}
+			Say ([Convert]::ToBase64String($buf, 0, $n))
+		} finally {
+			$s.Dispose()
+		}
+	}
 	# LIST_DIR_SCRIPT: folders first, then files, omitting links and hidden names by default.
 	'listdir' {
 		if ($a.Count -ne 3 -or -not (Test-LocalPath $a[0])) { exit 2 }

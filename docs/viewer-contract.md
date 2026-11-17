@@ -20,7 +20,7 @@ Each frontend page names itself with a random `client` query parameter on `state
 clears itself and calls `window.close()` (its frame changes pages with `location.replace`, so its
 history holds one entry and the browser lets it close). A superseded page's `goodbye` is ignored.
 
-The browser host also accepts `POST select` with `{file: absoluteLocalPath, returnTo?, raise?}`, `POST surface` with `{bundle}` and `POST close`.
+The browser host also accepts `POST select` with `{file: absoluteLocalPath, returnTo?, raise?}`, `POST surface` with `{bundle}` and `POST close`, which answers `{open}`: whether a viewer page was showing the selection (it spoke in the last 10 s). Space again on the viewer's item clears it only then; after the person closed the window, the same Space opens it again.
 `returnTo` is the pid of the app the selection came from and `raise: true` asks for a new window
 even when a viewer page is alive (on macOS with Chrome, every open: a window behind others cannot
 bring itself forward). `surface` records the bundle id of the app window the launcher opened
@@ -31,21 +31,23 @@ and, only if it is still that browser, activates `returnTo` (`osascript -l JavaS
 
 ## Current behavior and later layers
 
-### The preview window
+### The built-in preview
 
-Space on a local Markdown, HTML, PDF or still-image item opens the mod as a Herdr overlay window
-(`openOverlay({kind: "window", key: "readlist-preview"})`, props `{role: "window", file, title}`)
-instead of the browser surface. Markdown, HTML and PDF are drawn as tiles by `render.mjs`, with the
+Space on a local file opens the mod as a Herdr overlay window (`openOverlay({kind: "window", key:
+"readlist-preview"})`, props `{role: "window", file, title}`); `v` shows the same preview docked
+and `rl preview` as a pane. Markdown, HTML and PDF are drawn as tiles by `render.mjs`, with the
 same host, manifest and document CSP as below; Markdown goes through the host's rendered-Markdown
 document route, and PDF through the trusted `pages` view, which lays out every page (at most 100)
-and draws page canvases only around the tile being captured. Images use the pane's image renderer.
-The window takes the keyboard; Enter calls the same `host.mjs open` as the list and closes the
-window. Video and glTF go straight to the browser surface. Without tiles, the window shows the
-pane's text preview (none for PDF).
+and draws page canvases only around the tile being captured. Images use the mod's image renderer,
+a local video an FFmpeg frame (`video-poster.mjs`), glTF a still (`render-model.mjs`). The window
+takes the keyboard; Space calls `host.mjs open` (the browser surface) and closes the window. Its
+width (70 % of Herdr's within 640-1280 px, or the one last chosen with `[` / `]`) sets the tile
+width, so a resize draws the page again at the new width. Without tiles, it shows the text (none
+for PDF).
 
-### In-pane HTML tiles
+### Page tiles
 
-The reading list's own preview pane renders a local HTML selection with the same `manifestFor`
+The built-in preview renders a local HTML selection with the same `manifestFor`
 allowlist and `createHost` document route as the browser viewer. A separate headless installed
 Chrome, Chromium or Edge captures 512 CSS-pixel-high PNG tiles at the pane width and 2× scale.
 The renderer uses the document CSP from this host, which disables scripts and network resources;
@@ -63,9 +65,9 @@ The mod shows only visible tiles. A captured link can open another allowed local
 same pane; fragment links scroll within the page. Back or Backspace returns to the previous page.
 Remote items retain the existing text preview and local-copy rules. When the browser binary or
 rendering is unavailable, a brief note accompanies the existing HTML TextView preview. The tiles
-are images; Enter in the preview window opens the selectable, searchable browser viewer.
+are images; Space in the built-in preview opens the selectable, searchable browser viewer.
 
-By default, Space on a local video (`.mp4`, `.m4v`, `.webm`, `.mov`) or glTF (`.glb`, `.gltf`) item opens or updates one local viewer surface, and Space on Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`), HTML (`.html`, `.htm`, `.xhtml`), PDF (`.pdf`) or a browser image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`, `.heic`, `.heif`, `.bmp`) opens the preview window above, whose Enter opens the same surface. In the list's `f` menu, **Space preview → System preview** routes these types to the platform handler instead (Quick Look, GNOME Sushi, QuickLook or PowerToys Peek). Herdr stores the choice at `readlist.space_preview` in its live `settings.json`; `builtin` is the default and `system` selects the platform. Each Space press reads that value, so edits apply without a restart and every copy uses the same choice. TIFF and PSD always retain the platform handler. The person's opted-in Space handler retains first choice. The viewer needs Node.js 20 or newer and a browser. The launcher uses a Chrome app window on macOS when installed, an Edge app window on Windows when installed, or a Chromium app window on Linux when installed; otherwise it opens the system browser URL. If launch fails, Space shows the existing native in-pane preview. A platform handler that passes also falls back to the in-pane preview. Enter continues to reveal executable files and application bundles according to `core/items.js`; opening the viewer neither marks an item read nor changes Enter.
+By default, Space on a local file opens the built-in preview above. Space there on a local Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`), HTML (`.html`, `.htm`, `.xhtml`), PDF (`.pdf`), video (`.mp4`, `.m4v`, `.webm`, `.mov`), glTF (`.glb`, `.gltf`) or browser image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`, `.heic`, `.heif`, `.bmp`) opens or updates one local viewer surface. In the list's `f` menu, **Space preview → System preview** routes these types to the platform handler instead (Quick Look, GNOME Sushi, QuickLook or PowerToys Peek). Herdr stores the choice at `readlist.space_preview` in its live `settings.json`; `builtin` is the default and `system` selects the platform. Each Space press reads that value, so edits apply without a restart and every copy uses the same choice. TIFF and PSD always retain the platform handler. The person's opted-in Space handler retains first choice. The viewer needs Node.js 20 or newer and a browser. The launcher uses a Chrome app window on macOS when installed, an Edge app window on Windows when installed, or a Chromium app window on Linux when installed; otherwise it opens the system browser URL. If launch fails, the built-in preview says why and stays open. With System preview, a platform handler that passes falls back to the built-in preview window. Enter continues to reveal executable files and application bundles according to `core/items.js`; opening the viewer neither marks an item read nor changes Enter.
 
 Markdown is rendered by locally bundled Marked with GFM headings, lists, tables, task lists, links, images and fenced code blocks. Raw HTML is escaped and shown as text. Code blocks retain their language class but do not use a separate syntax-highlighting runtime. The output loads in the same scriptless, sandboxed frame as HTML. Relative links and images are included only when the resolved real file stays below the selected Markdown file's real parent folder and fits the document manifest limits. Linked Markdown pages are rendered by the same route. Remote URLs, data URLs, missing files and path escapes are rendered without active links or images. `rl preview --browser` uses this route too; its native `--pane` preview remains available when the browser viewer cannot open.
 
@@ -83,13 +85,13 @@ no read state, toast or remote copy is made. The default `--pane` calls
 {"direction":"right","mod":"readlist","props":{"role":"preview","file":"/absolute/local/file.pdf"}}
 ```
 
-The preview role makes a transient item only in memory and uses the list
-selection's native renderer: HTML tiles, PDF thumbnails, model posters, image
-controls and the other in-pane formats. It does not subscribe to list arrivals
+The preview role makes a transient item only in memory and shows it with the
+built-in preview: page tiles, images, video frames, model stills, text and the
+other formats. It does not subscribe to list arrivals
 or take list keyboard commands. A live preview pane owns a shared file request;
 when another split arrives, the new pane passes its file to the old one and
-closes, retaining one preview pane. Its header names the file and offers Space
-for the browser viewer when supported and Close. Space uses the same installed
+closes, retaining one preview pane. Its header names the file and offers the
+preview's buttons (Enter, Space for the browser viewer, `q`, `o`) and Close. Space uses the same installed
 `viewer/host.mjs open` path as a list item, including the allowlist and reused
 browser session. `--browser` calls that host directly, so it needs Node.js and
 a browser but no open Herdr window.
@@ -130,7 +132,7 @@ The selected HTML or rendered Markdown document is untrusted. It loads inside `<
 | No Node or browser | Native TextView fallback | Same | Same |
 | Repeated open and a different HTML selection | One viewer window: a new one in front, the old one closes | One reused viewer surface | One reused viewer surface |
 | Viewer window or Quick Look closes while it is the active app | Herdr is active again; not after a switch elsewhere | Not handled | Not handled |
-| Space on Markdown, HTML, PDF or an image | Herdr preview window with tiles; Enter opens the viewer | Same | Same |
+| Space on a file | Herdr preview window (tiles, image, video frame, model still, text); Space there opens the viewer | Same | Same |
 | PDF pages, zoom, find and copy | Bundled PDF.js in reused surface | Same | Same |
 | Video seek and unsupported codec | Byte ranges; native controls or default-app fallback | Same | Same |
 | Browser still image and inert SVG | Fit, actual size, zoom, pan, rotate; SVG cannot run scripts | Same | Same |

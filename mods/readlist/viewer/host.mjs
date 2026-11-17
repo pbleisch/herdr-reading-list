@@ -356,9 +356,12 @@ export async function createHost({ token = randomBytes(32).toString("hex"), port
         return send(res, 204);
       }
       if (route === "close" && req.method === "POST") {
+        // `open`: whether a viewer page was showing it (it spoke in the last 10 s). The person
+        // may have closed the window since the last Space, and then there was nothing to close.
+        const open = Boolean(current) && Date.now() - clientAt < 10000;
         current = null;
         revision++;
-        return send(res, 204);
+        return send(res, 200, JSON.stringify({ open }), "application/json");
       }
       if (route === "select" && req.method === "POST") {
         const input = await bodyJson(req);
@@ -562,8 +565,10 @@ async function main() {
     return;
   }
   if (action === "close" && dir) {
+    // Prints "closed" when a viewer window was showing the selection, else "idle".
     const running = await session(dir);
-    if (running) await fetch(running.base + "close", { method: "POST" });
+    const result = running ? await (await fetch(running.base + "close", { method: "POST" })).json().catch(() => ({})) : {};
+    process.stdout.write(result.open ? "closed\n" : "idle\n");
     return;
   }
   if (action !== "open" || !dir || !file || !path.isAbsolute(file)) throw new Error("Expected open SESSION_DIR ABSOLUTE_FILE");

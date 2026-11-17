@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createHost, gltfManifestFor, RETURN_DELAY_MS } from "../mods/readlist/viewer/host.mjs";
-import { browserViewerType, spacePreviewRoute, viewerFailureNotice, windowAction, windowPlan, pagesNote } from "../mods/readlist/core/browser-viewer.js";
+import { browserViewerType, spacePreviewRoute, viewerFailureNotice, windowAction, windowPlan, pagesNote, herdrWidth, windowWidth, resizedWidth, windowResizeKey } from "../mods/readlist/core/browser-viewer.js";
 import { folderItems } from "../mods/readlist/core/folder.js";
 import { typeOf } from "../mods/readlist/core/items.js";
 import { fitScale, clampZoom, rotateQuarter, installImageControls } from "../mods/readlist/viewer/image-controls.js";
@@ -300,25 +300,18 @@ test("browser routing covers models and decodable images while retaining native-
   assert.equal(typeOf({ path: "a.glb" }), "gltf");
 });
 
-test("Space routes covered types according to the preview setting, leaving other types with the system", () => {
-  // Pages and images open in the Herdr preview window; video and models in the browser.
-  for (const [file, route] of [["page.md", "window"], ["page.html", "window"], ["page.pdf", "window"], ["photo.png", "window"],
-    ["clip.mp4", "browser"], ["model.glb", "browser"], ["scene.gltf", "browser"]]) {
+test("Space opens the built-in preview window for every file, or the system preview as chosen", () => {
+  for (const file of ["page.md", "page.html", "page.pdf", "photo.png", "clip.mp4", "model.glb", "report.txt", "photo.tiff", "deck.key"]) {
     const item = { path: `/items/${file}` };
-    assert.equal(spacePreviewRoute(item, "builtin"), route, file);
+    assert.equal(spacePreviewRoute(item, "builtin"), "window", file);
     assert.equal(spacePreviewRoute(item, "system"), "system", file);
   }
-  for (const item of [{ path: "/items/report.txt" }, { path: "/items/photo.tiff" }, { url: "https://example.com" }]) {
-    assert.equal(spacePreviewRoute(item, "builtin"), "system");
-    assert.equal(spacePreviewRoute(item, "system"), "system");
-  }
+  assert.equal(spacePreviewRoute({ url: "https://example.com" }, "builtin"), "system", "a link has no file to preview");
 });
 
-test("the preview window: Esc and Space close it, Enter goes interactive, Space toggles it from the list", () => {
-  assert.equal(windowAction("escape"), "close");
-  assert.equal(windowAction("space"), "close");
-  assert.equal(windowAction("enter"), "interactive");
-  for (const k of ["j", "down", "pagedown", "shift-space", "backspace"]) assert.equal(windowAction(k), null, k);
+test("the built-in preview: Enter opens, Space goes interactive, q system preview, o reveals, Esc closes", () => {
+  assert.deepEqual(["enter", "space", "q", "o", "escape"].map(windowAction), ["open", "interactive", "system", "reveal", "close"]);
+  for (const k of ["j", "down", "pagedown", "shift-space", "backspace", "v", "["]) assert.equal(windowAction(k), null, k);
   const open = { overlay: "o1", id: "item-a" };
   assert.equal(windowPlan(null, "item-a", "window"), null);
   assert.equal(windowPlan({ overlay: null, closed: "o1" }, "item-a", "window"), null);
@@ -329,6 +322,33 @@ test("the preview window: Esc and Space close it, Enter goes interactive, Space 
   assert.equal(pagesNote({ pages: 12, shown: 12 }), null);
   assert.equal(pagesNote(null), null);
   assert.match(pagesNote({ pages: 412, shown: 100 }), /first 100 of 412 pages/);
+});
+
+test("the preview window opens at 70% of Herdr's width within 640-1280 px, and [ / ] resize it", () => {
+  assert.equal(herdrWidth('{"state":"windowed","bounds":[400.0,171.0,2400.0,1410.0]}'), 2400);
+  for (const bad of [null, "", "{", '{"bounds":[0,0]}', '{"bounds":[0,0,-5,9]}']) assert.equal(herdrWidth(bad), null, String(bad));
+  // The default: a share of the window, never so wide that lines get hard to read.
+  assert.equal(windowWidth(undefined, 1400), 980);
+  assert.equal(windowWidth(undefined, 2400), 1280);
+  assert.equal(windowWidth(undefined, 800), 640);
+  assert.equal(windowWidth(undefined, 600), 588, "never wider than the window");
+  assert.equal(windowWidth(undefined, null), 0.7, "a share when the window's size is unknown");
+  // A kept width wins, still inside the window.
+  assert.equal(windowWidth(1500, 2400), 1500);
+  assert.equal(windowWidth(1500, 1200), 1176);
+  assert.equal(windowWidth(100, 2400), 480);
+  assert.equal(windowWidth(1500, null), 1500);
+  // Steps of 15%, between 480 px and the window's width.
+  assert.equal(resizedWidth(1000, 1, 2400), 1150);
+  assert.equal(resizedWidth(1150, -1, 2400), 1000);
+  assert.equal(resizedWidth(1150, 1, 1200), 1176);
+  assert.equal(resizedWidth(1176, 1, 1200), null, "already as wide as it goes");
+  assert.equal(resizedWidth(500, -1, 2400), 480);
+  assert.equal(resizedWidth(480, -1, 2400), null);
+  assert.equal(resizedWidth(0, 1, 2400), null);
+  // `]` / `[` always; `=`, `+`, `-` only when no image is shown (they zoom an image).
+  assert.deepEqual(["]", "[", "=", "+", "-", "j"].map((k) => windowResizeKey(k)), [1, -1, 1, 1, -1, null]);
+  assert.deepEqual(["]", "[", "=", "+", "-"].map((k) => windowResizeKey(k, true)), [1, -1, null, null, null]);
 });
 
 test("a newer viewer window supersedes the old one, and closing the viewer hands focus back once", async (t) => {
@@ -372,6 +392,13 @@ test("a newer viewer window supersedes the old one, and closing the viewer hands
   await post("goodbye?client=three");
   await settle();
   assert.deepEqual(returned, [[4242, "com.google.Chrome"]]);
+
+  // Space again clears a viewer that is showing; with no page alive there was nothing to close.
+  assert.deepEqual(await (await post("close")).json(), { open: false });
+  await post("select", { file: path.join(dir, "a.html") });
+  await post("heartbeat?client=after");
+  assert.deepEqual(await (await post("close")).json(), { open: true });
+  assert.deepEqual(await (await post("close")).json(), { open: false });
 
   // Without a known surface (the system browser) or a return app, nothing is handed back.
   await post("surface", { bundle: null });
