@@ -2,6 +2,15 @@
 
 What changed for people who use the reading list. The version is the `version` in `package.json`.
 
+## 0.3.1
+
+A fix for a list that stops updating.
+
+### Fixed
+
+- The sidebar reading list no longer stops updating when a file check hangs. Reads of its folder
+  are bounded, and it rereads the folder on a renewed watch.
+
 ## 0.3.0
 
 One preview, inside Herdr. Space now opens a floating Herdr window for every file, `v` docks the
