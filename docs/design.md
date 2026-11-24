@@ -341,6 +341,11 @@ Local items are keyed by id; remote ones are keyed `<machine>/<id>`, the address
 
 ### 4.4 Arrival: toast and count
 
+- **Staying current:** a copy reloads on every batch from its folder watch and every 30 s. A watch
+  quiet for 5 minutes is replaced (Herdr may reclaim idle ones), and a refused one is tried again
+  every 30 s. The reload, the inbox and the Claude Code scan each run one pass at a time, and every
+  call in a pass gives up after 60 s, so one call that never answers cannot hold the loop. A copy
+  left in the layout for days stays current (`core/refresh.js`).
 - New or re-added items (seen through the watch or a poll) post one toast:
   `notify({title: "Reading list: plan.md", body: "claude t7: Revised rollout plan...",
   action})` (row 21). The action focuses an existing reading-list pane found through `panes()`

@@ -41,6 +41,7 @@ import { SCROLL_KEYS, keyOffset, wheelOffset, centerOffset, alignOffset, clampOf
 import { IMAGE_BACKGROUND_LABEL, IMAGE_GRAYS, CHECKER_TILE, imageBackground, nextImageBackground, checkerTiles, fromBase64, imageSize, fittedRect } from "./core/image.js";
 import { darkBackground, tileFallback, tileSlots, tileLinkAt, followTileLink, backTileLink } from "./core/tiles.js";
 import { NAME } from "./core/name.js";
+import { STEP_MS, bounded, serial, follow } from "./core/refresh.js";
 import { INSTALL_RL_TEXT_SCRIPT, parseRlStatus, rlBanner, installToast } from "./core/install.js";
 import { POLL_MS, POLL_TIMEOUT_MS, ASK_MS, POLL_SCRIPT, BASE64_SCRIPT, parsePoll, afterPoll, syncMachines, pollPaths, unstated, mergeItems, onMachine, listedMachines, isOffline, safeName, copyPaths, parseMeta, isStale, fetchRoute, needsAsk, fetchedLabel, sizeLabel, remoteBanner } from "./core/remote.js";
 
@@ -205,6 +206,10 @@ export default class ReadingList extends View {
     // Arrivals waiting for their burst to end (arrival key -> item).
     this.pending = new Map();
     this.reclaims = 0;
+    // The loops that read or write the list, one pass at a time each (core/refresh.js serial).
+    this.reloads = serial((cx) => this.reloadOnce(cx));
+    this.inboxes = serial((cx) => this.takeInboxOnce(cx));
+    this.sends = serial((cx, more) => this.scanSentOnce(cx, more));
     // Files Claude Code agents sent (core/sent.js): each agent's transcript as last read
     // (address -> { sig, session, sends }), and the agents' addresses and states then.
     this.sentCache = new Map();
@@ -447,63 +452,54 @@ export default class ReadingList extends View {
     return Boolean(props()?.overlay) && !props()?.menu && !this.transientRole();
   }
 
+  // Reloads on every change in the list folder, keeping the watch alive (core/refresh.js
+  // follow); the 30 s reload covers a watch Herdr dropped or refused until it is back.
   watch(cx) {
-    cx.spawn(async (cx) => {
-      try {
-        for (;;) {
-          await watchFolder(this.dir);
-          await this.reload(cx);
-        }
-      } catch {
-        // No watch (unlikely on macOS): poll instead.
-        cx.timer.every(5000, (cx) => this.reload(cx));
-      }
-    });
+    cx.spawn((cx) => follow(() => watchFolder(this.dir), () => this.reload(cx), (ms) => cx.sleep(ms)).catch(() => {}));
+  }
+
+  // `promise`, or a rejection after STEP_MS: a call that never answers cannot hold a loop.
+  io(cx, promise, what) {
+    return bounded(promise, STEP_MS, (ms) => cx.sleep(ms), what);
   }
 
   // Reads every item file and state.json; one reload at a time, and one more if
   // something changed meanwhile.
   async reload(cx) {
-    if (this.loading) {
-      this.again = true;
-      return;
-    }
-    this.loading = true;
     try {
-      do {
-        this.again = false;
-        const [list, stateText] = await Promise.all([
-          this.helper("list", [this.file("items")]),
-          readTextFile(this.file("state.json")),
-        ]);
-        const items = parseListing(list.stdout);
-        const paths = items.filter((i) => i.path).map((i) => i.path);
-        let st = { fs: {}, mt: {} };
-        if (paths.length) st = parseStats((await this.helper("stats", paths)).stdout, paths);
-        const ids = items.map((i) => i.id).sort().join(" ");
-        if (ids !== this.ids) {
-          this.ids = ids;
-          this.helper("prune", [joinPath(appHome(), CACHE), ...items.map((i) => i.id)]).catch(() => {});
-        }
-        this.local = onMachine(items, null);
-        this.localSt = st;
-        this.merge();
-        this.gen++;
-        const wasOn = sentOn(this.state);
-        this.state = parseState(stateText);
-        if (sentOn(this.state) && !wasOn) this.scanSent(cx);
-        this.error = null;
-        this.loaded = true;
-        this.arrived(null, this.local, cx);
-        this.publish();
-      } while (this.again);
+      if (!(await this.reloads(cx))) return;
     } catch (e) {
       this.error = String(e?.message ?? e);
-    } finally {
-      this.loading = false;
     }
     cx.notify();
     this.takeInbox(cx);
+  }
+
+  async reloadOnce(cx) {
+    const [list, stateText] = await this.io(cx, Promise.all([
+      this.helper("list", [this.file("items")]),
+      readTextFile(this.file("state.json")),
+    ]));
+    const items = parseListing(list.stdout);
+    const paths = items.filter((i) => i.path).map((i) => i.path);
+    let st = { fs: {}, mt: {} };
+    if (paths.length) st = parseStats((await this.io(cx, this.helper("stats", paths))).stdout, paths);
+    const ids = items.map((i) => i.id).sort().join(" ");
+    if (ids !== this.ids) {
+      this.ids = ids;
+      this.helper("prune", [joinPath(appHome(), CACHE), ...items.map((i) => i.id)]).catch(() => {});
+    }
+    this.local = onMachine(items, null);
+    this.localSt = st;
+    this.merge();
+    this.gen++;
+    const wasOn = sentOn(this.state);
+    this.state = parseState(stateText);
+    if (sentOn(this.state) && !wasOn) this.scanSent(cx);
+    this.error = null;
+    this.loaded = true;
+    this.arrived(null, this.local, cx);
+    this.publish();
   }
 
   // Every item, this machine's and the others' (core/remote.js mergeItems).
@@ -767,41 +763,35 @@ export default class ReadingList extends View {
   // whose state.json write recorded it; core/inbox.js).
   async takeInbox(cx) {
     if (!this.dir) return;
-    if (this.inboxBusy) {
-      this.inboxAgain = true;
-      return;
-    }
-    this.inboxBusy = true;
     try {
-      do {
-        this.inboxAgain = false;
-        const r = await this.helper("inbox", [this.file("inbox")]);
-        const entries = parseInbox(r.stdout);
-        const path = this.file("state.json");
-        let todo = [];
-        let wait = false;
-        for (let attempt = 0; attempt < 5; attempt++) {
-          const text = await readTextFile(path);
-          const st = parseState(text);
-          const plan = inboxPlan(entries, st.inbox, Date.now() / 1000);
-          wait = plan.wait;
-          if (!plan.changed) break;
-          try {
-            await writeTextFile(path, serializeState(withInbox(st, plan.inbox)), text);
-            todo = plan.todo;
-            break;
-          } catch {
-            // Another copy wrote first: read again (it may have taken these entries).
-          }
-        }
-        if (todo.length) await this.add(todo.map((e) => joinPath(this.dir, "inbox", e.name)), "inbox");
-        if (wait && !this.settleTimer) this.settleTimer = cx.timer.after(1500, (cx) => { this.settleTimer = null; this.takeInbox(cx); });
-      } while (this.inboxAgain);
+      await this.inboxes(cx);
     } catch (e) {
       notify({ title: "Reading list", body: `Couldn't read the inbox folder: ${String(e?.message ?? e)}`, level: "warning" });
-    } finally {
-      this.inboxBusy = false;
     }
+  }
+
+  async takeInboxOnce(cx) {
+    const r = await this.io(cx, this.helper("inbox", [this.file("inbox")]), "Reading the inbox folder");
+    const entries = parseInbox(r.stdout);
+    const path = this.file("state.json");
+    let todo = [];
+    let wait = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const text = await this.io(cx, readTextFile(path));
+      const st = parseState(text);
+      const plan = inboxPlan(entries, st.inbox, Date.now() / 1000);
+      wait = plan.wait;
+      if (!plan.changed) break;
+      try {
+        await this.io(cx, writeTextFile(path, serializeState(withInbox(st, plan.inbox)), text));
+        todo = plan.todo;
+        break;
+      } catch {
+        // Another copy wrote first: read again (it may have taken these entries).
+      }
+    }
+    if (todo.length) await this.io(cx, this.add(todo.map((e) => joinPath(this.dir, "inbox", e.name)), "inbox"), "Adding from the inbox folder");
+    if (wait && !this.settleTimer) this.settleTimer = cx.timer.after(1500, (cx) => { this.settleTimer = null; this.takeInbox(cx); });
   }
 
   // Runs rl add on `paths`; returns the ids it printed.
@@ -818,43 +808,34 @@ export default class ReadingList extends View {
   // recorded the send). One scan at a time, and one more if asked meanwhile.
   scanSent(cx) {
     if (this.role() === "viewer" || !this.dir || !sentOn(this.state)) return;
-    if (this.sentBusy) {
-      this.sentAgain = true;
-      return;
-    }
-    this.sentBusy = true;
-    cx.spawn(async () => {
+    cx.spawn(async (cx) => {
       try {
-        do {
-          this.sentAgain = false;
-          await this.scanSentOnce();
-        } while (this.sentAgain);
+        await this.sends(cx);
       } catch (e) {
         console.log(`readlist: reading Claude Code transcripts failed: ${String(e?.message ?? e)}`);
-      } finally {
-        this.sentBusy = false;
       }
     });
   }
 
-  async scanSentOnce() {
+  async scanSentOnce(cx, more) {
     const claude = agents().filter(isClaudeAgent);
     for (const address of this.sentCache.keys()) if (!claude.some((a) => a.address === address)) this.sentCache.delete(address);
     if (!claude.length) return;
-    const pids = await Promise.all(claude.map((a) => hc(["get", a.address, "--json"]).then((r) => foregroundPid(r.stdout), () => null)));
+    const what = "Reading Claude Code transcripts";
+    const pids = await this.io(cx, Promise.all(claude.map((a) => hc(["get", a.address, "--json"]).then((r) => foregroundPid(r.stdout), () => null))), what);
     const args = [];
     claude.forEach((a, n) => {
       if (pids[n]) args.push(a.address, String(pids[n]), this.sentCache.get(a.address)?.sig ?? "");
     });
     if (!args.length) return;
-    const r = await this.helper("scan", ["", ...args]);
+    const r = await this.io(cx, this.helper("scan", ["", ...args]), what);
     const scan = [];
     for (const s of parseScan(r.stdout)) {
       const had = this.sentCache.get(s.address);
       if (s.same && had?.session !== s.session) {
         // Unchanged, but not the session this copy read last: read it in full next time.
         this.sentCache.delete(s.address);
-        this.sentAgain = true;
+        more();
         continue;
       }
       const sends = s.same ? had.sends : s.sends;
@@ -864,12 +845,12 @@ export default class ReadingList extends View {
     const path = this.file("state.json");
     let todo = [];
     for (let attempt = 0; attempt < 5; attempt++) {
-      const text = await readTextFile(path);
+      const text = await this.io(cx, readTextFile(path));
       const st = parseState(text);
       const plan = sentPlan(scan, st.claude_files, Date.now());
       if (!plan.changed) break;
       try {
-        await writeTextFile(path, serializeState({ ...st, claude_files: plan.record }), text);
+        await this.io(cx, writeTextFile(path, serializeState({ ...st, claude_files: plan.record }), text));
         todo = plan.todo;
         break;
       } catch {
@@ -877,7 +858,7 @@ export default class ReadingList extends View {
       }
     }
     if (!todo.length) return;
-    const a = await this.helper("sent-add", [rlFile(this.platform, this.modDir()), ...sentAddArgs(todo)]).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+    const a = await this.io(cx, this.helper("sent-add", [rlFile(this.platform, this.modDir()), ...sentAddArgs(todo)]), what).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
     if (a.code !== 0) notify({ title: "Reading list", body: `Couldn't add a file Claude Code sent: ${a.stderr.trim()}`, level: "warning" });
   }
 
